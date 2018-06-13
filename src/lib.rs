@@ -1,3 +1,4 @@
+#![no_std]
 #![feature(specialization, macro_vis_matcher, allow_internal_unstable)]
 
 //! A generic zero-cost event handler system. Event dispatches should get compiled down to a
@@ -151,7 +152,7 @@
 //! As all event handlers are passed around using immutable pointers, locking or cells must be
 //! used to store state in handlers.
 
-#[allow(unused_imports)] use std::fmt::Debug; // for doc
+#[allow(unused_imports)] use core::fmt::Debug; // for doc
 
 /// The generic trait that defines an event.
 pub trait Event {
