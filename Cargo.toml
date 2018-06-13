@@ -7,7 +7,7 @@ description = "A library for creating zero-cost event systems."
 keywords = ["events", "static"]
 categories = ["rust-patterns"]
 
-documentation = "https://lymia.moe/doc/static-events/static-events/"
+documentation = "https://docs.rs/simple-events/"
 repository = "https://github.com/Lymia/static-events"
 readme = "README.md"
 
