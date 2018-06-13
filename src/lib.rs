@@ -54,21 +54,12 @@
 //!
 //! # Defining events
 //!
-//! Any module can define an event. Events are normal types that implement the [`Event`] trait:
+//! Any module can define an event. Events are normal types that implement the [`Event`] trait,
+//! which can be declared with various macros;
+//! * [`simple_event!`] for events that directly return their state to the caller, or do not
+//!   use state at all.
+//! * [`ipc_event!`] for events that should only have one listener processing it.
 //!
-//! ```
-//! use static_events::*;
-//! pub struct MyEvent(u32);
-//! impl Event for MyEvent {
-//!     type State = u32;
-//!     type RetVal = u32;
-//!     fn starting_state(&self, _: &impl EventDispatch) -> u32 { 0 }
-//!     fn to_return_value(&self, _: &impl EventDispatch, state: u32) -> u32 { state }
-//! }
-//! ```
-//!
-//! Macros exist to declare [`Event`] impls easier for most simpler use cases. For example, the
-//! following example is identical to the previous one:
 //! ```
 //! # #[macro_use] extern crate static_events;
 //! # use static_events::*;
@@ -76,10 +67,8 @@
 //! simple_event!(MyEvent, u32, 0);
 //! ```
 //!
-//! The available helper macros are:
-//! * [`simple_event!`] for events that directly return their state to the caller, or do not
-//!   use state at all.
-//! * [`ipc_event!`] for events that should only have one listener processing it.
+//! While [`Event`] is stable API, and can be manually implemented, this should only be done in
+//! special cases.
 //!
 //! # Defining event handlers
 //!
@@ -156,13 +145,27 @@
 
 /// The generic trait that defines an event.
 pub trait Event {
-    /// The type of the state maintained between this event's functions.
+    /// The type of the state maintained between event handler calls.
     type State;
+    /// The type of the state that is passed to an event handler's methods.
+    type StateArg;
+    /// The return value of an event handler's methods.
+    ///
+    /// The `Default` impl should cause `to_event_result` to return a `EvOk`.
+    type MethodRetVal: Default;
     /// The ultimate return type of a call to this event.
     type RetVal;
 
     /// The starting state when an event is dispatched.
     fn starting_state(&self, _: &impl EventDispatch) -> Self::State;
+    /// Borrows the state passed to an event handler's methods from its internal representation.
+    fn borrow_state<'a>(
+        &self, _: &impl EventDispatch, _: &'a mut Self::State,
+    ) -> &'a mut Self::StateArg;
+    /// Extracts an [`EventResult`] from the method return value.
+    fn to_event_result(
+        &self, _: &impl EventDispatch, _: &mut Self::State, _: Self::MethodRetVal,
+    ) -> EventResult;
     /// Derives the output value of the event dispatch from the current state.
     fn to_return_value(&self, _: &impl EventDispatch, _: Self::State) -> Self::RetVal;
 }
@@ -200,9 +203,21 @@ macro_rules! simple_event {
     ($ev:ty, $state:ty, $starting_val:expr $(,)*) => {
         impl $crate::Event for $ev {
             type State = $state;
+            type StateArg = $state;
+            type MethodRetVal = EventResult;
             type RetVal = $state;
             fn starting_state(&self, _: &impl $crate::EventDispatch) -> $state {
                 $starting_val
+            }
+            fn borrow_state<'a>(
+                &self, _: &impl EventDispatch, state: &'a mut $state,
+            ) -> &'a mut $state {
+                state
+            }
+            fn to_event_result(
+                &self, _: &impl EventDispatch, _: &mut $state, result: EventResult,
+            ) -> EventResult {
+                result
             }
             fn to_return_value(
                 &self, _: &impl $crate::EventDispatch, state: $state,
@@ -228,6 +243,9 @@ macro_rules! simple_event {
 /// # use static_events::*;
 /// pub struct MyEvent(u32);
 /// ipc_event!(MyEvent, u32);
+///
+/// pub struct MyVoidEvent(u32);
+/// ipc_event!(MyVoidEvent);
 /// ```
 #[macro_export]
 macro_rules! ipc_event {
@@ -237,9 +255,21 @@ macro_rules! ipc_event {
     ($ev:ty, $state:ty $(,)*) => {
         impl $crate::Event for $ev {
             type State = Option<$state>;
+            type StateArg = Option<$state>;
+            type MethodRetVal = EventResult;
             type RetVal = $state;
             fn starting_state(&self, _: &impl $crate::EventDispatch) -> Option<$state> {
                 None
+            }
+            fn borrow_state<'a>(
+                &self, _: &impl EventDispatch, state: &'a mut Option<$state>,
+            ) -> &'a mut Option<$state> {
+                state
+            }
+            fn to_event_result(
+                &self, _: &impl EventDispatch, _: &mut Option<$state>, result: EventResult,
+            ) -> EventResult {
+                result
             }
             fn to_return_value(
                 &self, _: &impl $crate::EventDispatch, state: Option<$state>,
@@ -281,18 +311,18 @@ macro_rules! handlers {
         pub trait EventHandler<E: Event> : EventRoot {
             $(
                 fn $ev(
-                    &self, _: &impl EventDispatch, _: &mut E, _: &mut E::State,
-                ) -> EventResult {
-                    EvOk
+                    &self, _: &impl EventDispatch, _: &mut E, _: &mut E::StateArg,
+                ) -> E::MethodRetVal {
+                    Default::default()
                 }
             )*
         }
         impl <E: Event, T: EventRoot> EventHandler<E> for T {
             $(
                 default fn $ev(
-                    &self, _: &impl EventDispatch, _: &mut E, _: &mut E::State,
-                ) -> EventResult {
-                    EvOk
+                    &self, _: &impl EventDispatch, _: &mut E, _: &mut E::StateArg,
+                ) -> E::MethodRetVal {
+                    Default::default()
                 }
             )*
         }
@@ -321,7 +351,11 @@ macro_rules! handlers {
                 fn $ev<E: Event>(
                     &self, target: &impl EventDispatch, ev: &mut E, state: &mut E::State,
                 ) -> EventResult {
-                    EventHandler::$ev(self, target, ev, state)
+                    let result = {
+                        let state_arg = ev.borrow_state(target, state);
+                        EventHandler::$ev(self, target, ev, state_arg)
+                    };
+                    ev.to_event_result(target, state, result)
                 }
             )*
         }
@@ -345,8 +379,8 @@ macro_rules! event_handler_internal {
         fn on_event(
             &self, $target: &impl $crate::EventDispatch,
                    $ev: &mut $event,
-                   __simple_event__generated_state: &mut <$event as $crate::Event>::State,
-        ) -> $crate::EventResult {
+                   __simple_event__generated_state: &mut <$event as $crate::Event>::StateArg,
+        ) -> <$event as $crate::Event>::MethodRetVal {
             // Type check the state.
             let __simple_event__generated_state: &mut Option<_> = __simple_event__generated_state;
 
@@ -355,17 +389,22 @@ macro_rules! event_handler_internal {
             }
             let call_result = $ev_func;
             *__simple_event__generated_state = Some(call_result);
-            EvOk
+            Default::default()
         }
     };
     ($event:ty, $call_name:ident: |$target:pat, $ev:pat, $state:pat,| $ev_func:expr) => {
         event_handler_internal!(@verify_name $call_name);
         fn $call_name(
-            &self, $target: &impl $crate::EventDispatch,
-                   $ev: &mut $event,
-                   $state: &mut <$event as $crate::Event>::State,
-        ) -> $crate::EventResult {
-            $ev_func.into()
+            &self, __simple_event__generated_target: &impl $crate::EventDispatch,
+                   __simple_event__generated_ev: &mut $event,
+                   __simple_event__generated_state: &mut <$event as $crate::Event>::StateArg,
+        ) -> <$event as $crate::Event>::MethodRetVal {
+            let callback =
+                |$target, $ev: &mut $event, $state: &mut <$event as $crate::Event>::StateArg|
+                    -> <$event as $crate::Event>::MethodRetVal { $ev_func.into() };
+            callback(__simple_event__generated_target,
+                     __simple_event__generated_ev,
+                     __simple_event__generated_state)
         }
     };
     ($event:ty, $call_name:ident: |$($bind:pat,)*| $ev_func:expr) => {
@@ -402,7 +441,7 @@ macro_rules! event_handler_internal {
 /// The body of the handler for each type also follows struct syntax. Each record has the
 /// name of a method in [`EventHandler`] followed by a closure. It takes the same parameters
 /// as the corresponding method of [`EventHandler`]. The return value of this closure can be
-/// any type that implements `Into<EventResult>`:
+/// any type that implements `Into<E::MethodRetVal>`:
 /// ```
 /// # #![feature(specialization)]
 /// # #[macro_use] extern crate static_events;
