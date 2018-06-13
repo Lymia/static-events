@@ -435,34 +435,34 @@ macro_rules! event_handler_internal {
 
     ($event:ty, on_call: |$target:pat, $ev:pat,| $ev_func:expr) => {
         fn on_event(
-            &self, __simple_event__generated_target: &impl $crate::EventDispatch,
-                   __simple_event__generated_ev: &mut $event,
-                   __simple_event__generated_state: &mut Option<<$event as $crate::Event>::RetVal>,
+            &self, __static_event__generated_target: &impl $crate::EventDispatch,
+                   __static_event__generated_ev: &mut $event,
+                   __static_event__generated_state: &mut Option<<$event as $crate::Event>::RetVal>,
         ) -> <$event as $crate::Event>::MethodRetVal {
-            if __simple_event__generated_state.is_some() {
+            if __static_event__generated_state.is_some() {
                 panic!(concat!("Duplicate listeners responding to '", stringify!($event), "'."));
             }
             let callback =
                 |$target, $ev: &mut $event| -> <$event as $crate::Event>::RetVal { $ev_func };
-            let call_result = callback(__simple_event__generated_target,
-                                       __simple_event__generated_ev);
-            *__simple_event__generated_state = Some(call_result);
+            let call_result = callback(__static_event__generated_target,
+                                       __static_event__generated_ev);
+            *__static_event__generated_state = Some(call_result);
             Default::default()
         }
     };
     ($event:ty, $call_name:ident: |$target:pat, $ev:pat, $state:pat,| $ev_func:expr) => {
         event_handler_internal!(@verify_name $call_name);
         fn $call_name(
-            &self, __simple_event__generated_target: &impl $crate::EventDispatch,
-                   __simple_event__generated_ev: &mut $event,
-                   __simple_event__generated_state: &mut <$event as $crate::Event>::StateArg,
+            &self, __static_event__generated_target: &impl $crate::EventDispatch,
+                   __static_event__generated_ev: &mut $event,
+                   __static_event__generated_state: &mut <$event as $crate::Event>::StateArg,
         ) -> <$event as $crate::Event>::MethodRetVal {
             let callback =
                 |$target, $ev: &mut $event, $state: &mut <$event as $crate::Event>::StateArg|
                     -> <$event as $crate::Event>::MethodRetVal { $ev_func.into() };
-            callback(__simple_event__generated_target,
-                     __simple_event__generated_ev,
-                     __simple_event__generated_state)
+            callback(__static_event__generated_target,
+                     __static_event__generated_ev,
+                     __static_event__generated_state)
         }
     };
     ($event:ty, $call_name:ident: |$($bind:pat,)*| $ev_func:expr) => {
