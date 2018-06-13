@@ -377,17 +377,17 @@ macro_rules! event_handler_internal {
 
     ($event:ty, on_call: |$target:pat, $ev:pat,| $ev_func:expr) => {
         fn on_event(
-            &self, $target: &impl $crate::EventDispatch,
-                   $ev: &mut $event,
-                   __simple_event__generated_state: &mut <$event as $crate::Event>::StateArg,
+            &self, __simple_event__generated_target: &impl $crate::EventDispatch,
+                   __simple_event__generated_ev: &mut $event,
+                   __simple_event__generated_state: &mut Option<<$event as $crate::Event>::RetVal>,
         ) -> <$event as $crate::Event>::MethodRetVal {
-            // Type check the state.
-            let __simple_event__generated_state: &mut Option<_> = __simple_event__generated_state;
-
             if __simple_event__generated_state.is_some() {
                 panic!(concat!("Duplicate listeners responding to '", stringify!($event), "'."));
             }
-            let call_result = $ev_func;
+            let callback =
+                |$target, $ev: &mut $event| -> <$event as $crate::Event>::RetVal { $ev_func };
+            let call_result = callback(__simple_event__generated_target,
+                                       __simple_event__generated_ev);
             *__simple_event__generated_state = Some(call_result);
             Default::default()
         }
