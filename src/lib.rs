@@ -1,5 +1,7 @@
 #![no_std]
-#![feature(specialization, macro_vis_matcher, allow_internal_unstable)]
+#![feature(specialization, macro_vis_matcher, macro_at_most_once_rep, allow_internal_unstable)]
+
+// TODO: Use custom derive rather than the merged_eventset! macro.
 
 //! A generic zero-cost event handler system. Event dispatches should get compiled down to a
 //! plain function that executes all handlers involved with no dynamic dispatches.
@@ -58,6 +60,7 @@
 //! which can be declared with various macros;
 //! * [`simple_event!`] for events that directly return their state to the caller, or do not
 //!   use state at all.
+//! * [`failable_event!`] for events that can fail and return [`Result`]s.
 //! * [`ipc_event!`] for events that should only have one listener processing it.
 //!
 //! ```
@@ -124,13 +127,12 @@
 //!
 //! merged_eventset! {
 //!     #[derive(Default)]
-//!     struct SquaringEventHandler {
-//!         evh_a: MyEventHandler, evh_b: MyOtherEventHandler,
+//!     struct SquaringEventHandler<T: EventSet> {
+//!         evh_a: MyEventHandler, evh_b: T,
 //!     }
 //! }
 //!
-//! assert_eq!(SquaringEventHandler::default().dispatch(MyEvent(9)), 81);
-//! assert_eq!(SquaringEventHandler::default().dispatch(MyEvent(12)), 144);
+//! assert_eq!(SquaringEventHandler::<MyOtherEventHandler>::default().dispatch(MyEvent(9)), 81);
 //! ```
 //!
 //! # Limitations
@@ -150,22 +152,18 @@ pub trait Event {
     /// The type of the state that is passed to an event handler's methods.
     type StateArg;
     /// The return value of an event handler's methods.
-    ///
-    /// The `Default` impl should cause `to_event_result` to return a `EvOk`.
-    type MethodRetVal: Default;
+    type MethodRetVal;
     /// The ultimate return type of a call to this event.
     type RetVal;
 
     /// The starting state when an event is dispatched.
     fn starting_state(&self, _: &impl EventDispatch) -> Self::State;
     /// Borrows the state passed to an event handler's methods from its internal representation.
-    fn borrow_state<'a>(
-        &self, _: &impl EventDispatch, _: &'a mut Self::State,
-    ) -> &'a mut Self::StateArg;
+    fn borrow_state<'a>(&self, _: &'a mut Self::State) -> &'a mut Self::StateArg;
+    /// The default return value for handlers without an explicit implementation of this event.
+    fn default_return(&self) -> Self::MethodRetVal;
     /// Extracts an [`EventResult`] from the method return value.
-    fn to_event_result(
-        &self, _: &impl EventDispatch, _: &mut Self::State, _: Self::MethodRetVal,
-    ) -> EventResult;
+    fn to_event_result(&self, _: &mut Self::State, _: Self::MethodRetVal) -> EventResult;
     /// Derives the output value of the event dispatch from the current state.
     fn to_return_value(&self, _: &impl EventDispatch, _: Self::State) -> Self::RetVal;
 }
@@ -193,14 +191,15 @@ pub trait Event {
 /// simple_event!(MyEventC, u32, 42);
 /// ```
 #[macro_export]
+#[allow_internal_unstable]
 macro_rules! simple_event {
-    ($ev:ty $(,)*) => {
+    ($ev:ty $(,)?) => {
         simple_event!($ev, (), ());
     };
-    ($ev:ty, $state:ty $(,)*) => {
+    ($ev:ty, $state:ty $(,)?) => {
         simple_event!($ev, $state, Default::default());
     };
-    ($ev:ty, $state:ty, $starting_val:expr $(,)*) => {
+    ($ev:ty, $state:ty, $starting_val:expr $(,)?) => {
         impl $crate::Event for $ev {
             type State = $state;
             type StateArg = $state;
@@ -209,19 +208,78 @@ macro_rules! simple_event {
             fn starting_state(&self, _: &impl $crate::EventDispatch) -> $state {
                 $starting_val
             }
-            fn borrow_state<'a>(
-                &self, _: &impl EventDispatch, state: &'a mut $state,
-            ) -> &'a mut $state {
+            fn borrow_state<'a>(&self, state: &'a mut $state) -> &'a mut $state {
                 state
             }
-            fn to_event_result(
-                &self, _: &impl EventDispatch, _: &mut $state, result: EventResult,
-            ) -> EventResult {
+            fn default_return(&self) -> EventResult {
+                Default::default()
+            }
+            fn to_event_result(&self, _: &mut $state, result: EventResult) -> EventResult {
                 result
             }
             fn to_return_value(
                 &self, _: &impl $crate::EventDispatch, state: $state,
             ) -> $state {
+                state
+            }
+        }
+    };
+}
+
+/// A helper macro to define events that can fail.
+///
+/// The first argument is the event type, the second is the type of the event state, and the
+/// third is the type of the error type, and the fourth is the starting value of the initial
+/// state.
+///
+/// If the fourth argument is omitted, it is assumed to be [`Default::default`].
+///
+/// Handlers for events defined with this macro return a `Result<EventResult, E>`, and return
+/// the error to the caller of the event, cancelling all further events.
+///
+/// # Example
+///
+/// ```
+/// # #[macro_use] extern crate static_events;
+/// # use static_events::*;
+/// pub struct MyEvent(u32);
+/// failable_event!(MyEvent, u32, ::std::io::Error);
+/// ```
+#[macro_export]
+#[allow_internal_unstable]
+macro_rules! failable_event {
+    ($ev:ty, $state:ty, $error:ty $(,)?) => {
+        failable_event!($ev, $state, $error, Default::default());
+    };
+    ($ev:ty, $state:ty, $error:ty, $starting_val:expr $(,)?) => {
+        impl $crate::Event for $ev {
+            type State = Result<$state, $error>;
+            type StateArg = $state;
+            type MethodRetVal = Result<EventResult, $error>;
+            type RetVal = Result<$state, $error>;
+            fn starting_state(&self, _: &impl $crate::EventDispatch) -> Result<$state, $error> {
+                Ok($starting_val)
+            }
+            fn borrow_state<'a>(&self, state: &'a mut Result<$state, $error>) -> &'a mut $state {
+                state.as_mut().expect("Continuing already failed event?")
+            }
+            fn default_return(&self) -> Result<EventResult, $error> {
+                Ok(Default::default())
+            }
+            fn to_event_result(
+                &self, state: &mut Result<$state, $error>, result: Result<EventResult, $error>,
+            ) -> EventResult {
+                match result {
+                    Ok(result) => result,
+                    Err(err) => {
+                        *state = Err(err);
+                        EvCancel
+                    }
+                }
+            }
+            fn to_return_value(
+                &self, _: &impl $crate::EventDispatch, state: Result<$state, $error>,
+            ) -> Result<$state, $error> {
                 state
             }
         }
@@ -248,11 +306,12 @@ macro_rules! simple_event {
 /// ipc_event!(MyVoidEvent);
 /// ```
 #[macro_export]
+#[allow_internal_unstable]
 macro_rules! ipc_event {
-    ($ev:ty $(,)*) => {
+    ($ev:ty $(,)?) => {
         ipc_event!($ev, ());
     };
-    ($ev:ty, $state:ty $(,)*) => {
+    ($ev:ty, $state:ty $(,)?) => {
         impl $crate::Event for $ev {
             type State = Option<$state>;
             type StateArg = Option<$state>;
@@ -261,14 +320,13 @@ macro_rules! ipc_event {
             fn starting_state(&self, _: &impl $crate::EventDispatch) -> Option<$state> {
                 None
             }
-            fn borrow_state<'a>(
-                &self, _: &impl EventDispatch, state: &'a mut Option<$state>,
-            ) -> &'a mut Option<$state> {
+            fn borrow_state<'a>(&self, state: &'a mut Option<$state>) -> &'a mut Option<$state> {
                 state
             }
-            fn to_event_result(
-                &self, _: &impl EventDispatch, _: &mut Option<$state>, result: EventResult,
-            ) -> EventResult {
+            fn default_return(&self) -> EventResult {
+                Default::default()
+            }
+            fn to_event_result(&self, _: &mut Option<$state>, result: EventResult) -> EventResult {
                 result
             }
             fn to_return_value(
@@ -311,18 +369,18 @@ macro_rules! handlers {
         pub trait EventHandler<E: Event> : EventRoot {
             $(
                 fn $ev(
-                    &self, _: &impl EventDispatch, _: &mut E, _: &mut E::StateArg,
+                    &self, _: &impl EventDispatch, event: &mut E, _: &mut E::StateArg,
                 ) -> E::MethodRetVal {
-                    Default::default()
+                    event.default_return()
                 }
             )*
         }
         impl <E: Event, T: EventRoot> EventHandler<E> for T {
             $(
                 default fn $ev(
-                    &self, _: &impl EventDispatch, _: &mut E, _: &mut E::StateArg,
+                    &self, _: &impl EventDispatch, event: &mut E, _: &mut E::StateArg,
                 ) -> E::MethodRetVal {
-                    Default::default()
+                    event.default_return()
                 }
             )*
         }
@@ -352,10 +410,10 @@ macro_rules! handlers {
                     &self, target: &impl EventDispatch, ev: &mut E, state: &mut E::State,
                 ) -> EventResult {
                     let result = {
-                        let state_arg = ev.borrow_state(target, state);
+                        let state_arg = ev.borrow_state(state);
                         EventHandler::$ev(self, target, ev, state_arg)
                     };
-                    ev.to_event_result(target, state, result)
+                    ev.to_event_result(state, result)
                 }
             )*
         }
@@ -519,11 +577,11 @@ macro_rules! event_handler {
     (
         $name:ty, $(
             $event:ty: {
-                $($call_name:ident: |$($bind:pat),* $(,)*| $ev_func:expr),*
-                $(,)*
+                $($call_name:ident: |$($bind:pat),* $(,)?| $ev_func:expr),*
+                $(,)?
             }
         ),*
-        $(,)*
+        $(,)?
     ) => {$(
         impl $crate::EventHandler<$event> for $name {
             $( event_handler_internal!($event, $call_name: |$($bind,)*| $ev_func); )*
@@ -561,11 +619,11 @@ macro_rules! simple_event_handler {
     (
         $(#[$meta:meta])* $vis:vis $name:ident, $(
             $event:ty: {
-                $($call_name:ident: |$($bind:pat),* $(,)*| $ev_func:expr),*
-                $(,)*
+                $($call_name:ident: |$($bind:pat),* $(,)?| $ev_func:expr),*
+                $(,)?
             }
         ),*
-        $(,)*
+        $(,)?
     ) => {
         #[derive(Copy, Clone, Debug, Default)]
         $(#[$meta])*
@@ -599,22 +657,24 @@ macro_rules! merged_eventset_handler {
 /// field of the struct must implement [`EventSet`].
 ///
 /// The individual handlers will be called in the order that the fields are declared in.
+///
+/// At some point, this will be replaced with a procedural derive, i.e. `#[derive(EventSet)]`.
 #[macro_export]
 #[allow_internal_unstable]
 macro_rules! merged_eventset {
     ($(
         $(#[$meta:meta])*
-        $vis:vis struct $name:ident {
+        $vis:vis struct $name:ident $(<$($ty_param:ident $(: $ty_bound:path)?),* $(,)?>)? {
             $(
-                $(#[$field_meta:meta])* $field_name:ident: $field_type:ty
-            ),* $(,)*
+                $(#[$field_meta:meta])* $field_vis:vis $field_name:ident: $field_type:ty
+            ),* $(,)?
         }
     )*) => {$(
         $(#[$meta])*
-        $vis struct $name {
-            $($(#[$field_meta])* $field_name: $field_type,)*
+        $vis struct $name $(<$($ty_param $(: $ty_bound)?,)*>)? {
+            $($(#[$field_meta])* $field_vis $field_name: $field_type,)*
         }
-        impl $crate::EventSet for $name {
+        impl $(<$($ty_param $(: $ty_bound)?,)*>)? $crate::EventSet for $name $(<$($ty_param)*>)? {
             merged_eventset_handler!(init        , $($field_name)*);
             merged_eventset_handler!(check       , $($field_name)*);
             merged_eventset_handler!(before_event, $($field_name)*);
