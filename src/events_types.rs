@@ -8,6 +8,8 @@
 ///
 /// # Example
 ///
+/// Declaration:
+///
 /// ```
 /// # #[macro_use] extern crate static_events;
 /// # use static_events::*;
@@ -19,6 +21,23 @@
 ///
 /// pub struct MyEventC(u32);
 /// simple_event!(MyEventC, u32, 42);
+/// ```
+///
+/// Usage:
+/// ```
+/// # #![feature(specialization)]
+/// # #[macro_use] extern crate static_events;
+/// # use static_events::*;
+/// # pub struct MyEventB(u32); simple_event!(MyEventB, u32);
+/// struct MyEventHandler;
+/// impl RootEventDispatch for MyEventHandler { }
+/// impl EventHandler<MyEventB> for MyEventHandler {
+///     fn on_event(&self, _: &impl EventDispatch, ev: &mut MyEventB, state: &mut u32) -> EventResult {
+///         *state = ev.0 * ev.0;
+///         EvOk
+///     }
+/// }
+/// assert_eq!(MyEventHandler.dispatch(MyEventB(12)), 144);
 /// ```
 #[macro_export]
 #[allow_internal_unstable]
@@ -52,11 +71,35 @@ macro_rules! simple_event {
 ///
 /// # Example
 ///
+/// Declaration:
+///
 /// ```
 /// # #[macro_use] extern crate static_events;
-/// # use static_events::*;
+/// # use static_events::*; use std::io;
 /// pub struct MyEvent(u32);
-/// failable_event!(MyEvent, u32, ::std::io::Error);
+/// failable_event!(MyEvent, u32, io::Error);
+/// ```
+///
+/// Usage:
+///
+/// ```
+/// # #![feature(specialization)]
+/// # #[macro_use] extern crate static_events;
+/// # use static_events::*; use std::io;
+/// # pub struct MyEvent(u32); failable_event!(MyEvent, u32, ::std::io::Error);
+/// struct MyEventHandler;
+/// impl RootEventDispatch for MyEventHandler { }
+/// impl EventHandler<MyEvent> for MyEventHandler {
+///     fn on_event(
+///         &self, _: &impl EventDispatch, ev: &mut MyEvent, state: &mut u32,
+///     ) -> io::Result<EventResult> {
+///         if ev.0 > 50 { Err(io::Error::new(io::ErrorKind::Other, "too large!"))? }
+///         *state = ev.0 * ev.0;
+///         Ok(EvOk)
+///     }
+/// }
+/// assert_eq!(MyEventHandler.dispatch(MyEvent(12)).ok(), Some(144));
+/// assert!(MyEventHandler.dispatch(MyEvent(100)).is_err());
 /// ```
 #[macro_export]
 #[allow_internal_unstable]
@@ -105,18 +148,38 @@ macro_rules! failable_event {
 /// The first argument is the event type, the second is the type of the return value. If the
 /// second argument is omitted, it is assumed to be `()`.
 ///
-/// This is meant to be used with the `on_call` wrapper in [`event_handler!`].
+/// This is meant to be used with [`IpcEventHandler`].
 ///
 /// # Example
 ///
+/// Declaration:
+///
 /// ```
+/// # #![feature(specialization)]
 /// # #[macro_use] extern crate static_events;
 /// # use static_events::*;
-/// pub struct MyEvent(u32);
+/// struct MyEvent(u32);
 /// ipc_event!(MyEvent, u32);
 ///
-/// pub struct MyVoidEvent(u32);
-/// ipc_event!(MyVoidEvent);
+/// struct VoidEvent();
+/// ipc_event!(VoidEvent);
+/// ```
+///
+/// Usage:
+///
+/// ```
+/// # #![feature(specialization)]
+/// # #[macro_use] extern crate static_events;
+/// # use static_events::*;
+/// # struct MyEvent(u32); ipc_event!(MyEvent, u32);
+/// struct MyEventHandler;
+/// impl RootEventDispatch for MyEventHandler { }
+/// impl IpcEventHandler<MyEvent> for MyEventHandler {
+///     fn on_call(&self, _: &impl EventDispatch, ev: &mut MyEvent) -> u32 {
+///         ev.0 * ev.0
+///     }
+/// }
+/// assert_eq!(MyEventHandler.dispatch(MyEvent(12)), 144);
 /// ```
 #[macro_export]
 #[allow_internal_unstable]

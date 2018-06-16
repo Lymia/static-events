@@ -77,6 +77,7 @@
 //!   use state at all.
 //! * [`failable_event!`] for events that can fail and return [`Result`]s.
 //! * [`ipc_event!`] for events that should only have one listener processing it.
+//!   [`IpcEventHandler`] should be used instead of [`EventHandler`] for events of this type.
 //!
 //! # Defining event handlers
 //!
@@ -89,6 +90,7 @@
 //! # use static_events::*;
 //! # struct MyEvent(u32);
 //! # simple_event!(MyEvent, u32, 0);
+//! #[derive(Default)]
 //! struct MyEventHandler;
 //! impl RootEventDispatch for MyEventHandler { }
 //! impl EventHandler<MyEvent> for MyEventHandler {
@@ -101,34 +103,33 @@
 //! assert_eq!(MyEventHandler.dispatch(MyEvent(42)), 42);
 //! ```
 //!
-//! [`simple_event_handler!`] may also be used instead for handlers with no state or parameters.
-//! A [`event_handler!`] macro also exists which adds [`EventHandler`] impls to an existing
-//! struct, rather than creating a new one:
+//! Multiple event handlers may be merged using the [`merged_event_dispatch!`] macro:
 //! ```
 //! # #![feature(specialization)]
 //! # #[macro_use] extern crate static_events;
 //! # use static_events::*;
 //! # struct MyEvent(u32);
 //! # simple_event!(MyEvent, u32, 0);
-//! simple_event_handler!(MyEventHandler, MyEvent: {
-//!     on_event: |_, ev, i| { *i += ev.0 }
-//! });
-//! # assert_eq!(MyEventHandler.dispatch(MyEvent(42)), 42);
-//! ```
-//!
-//! Finally, multiple event handlers may be merged using the [`merged_event_dispatch!`] macro:
-//! ```
-//! # #![feature(specialization)]
-//! # #[macro_use] extern crate static_events;
-//! # use static_events::*;
-//! # struct MyEvent(u32);
-//! # simple_event!(MyEvent, u32, 0);
-//! simple_event_handler!(MyEventHandler, MyEvent: {
-//!     on_event: |_, ev, i| { *i += ev.0 }
-//! });
-//! simple_event_handler!(MyOtherEventHandler, MyEvent: {
-//!     on_event: |_, ev, i| { *i *= ev.0 }
-//! });
+//! #
+//! # // From previous example
+//! # #[derive(Default)]
+//! # struct MyEventHandler;
+//! # impl RootEventDispatch for MyEventHandler { }
+//! # impl EventHandler<MyEvent> for MyEventHandler {
+//! #     fn on_event(&self, _: &impl EventDispatch, ev: &mut MyEvent, i: &mut u32) -> EventResult {
+//! #         *i += ev.0;
+//! #         EvOk
+//! #     }
+//! # }
+//! #[derive(Default)]
+//! struct MyOtherEventHandler;
+//! impl RootEventDispatch for MyOtherEventHandler { }
+//! impl EventHandler<MyEvent> for MyOtherEventHandler {
+//!     fn on_event(&self, _: &impl EventDispatch, ev: &mut MyEvent, i: &mut u32) -> EventResult {
+//!         *i *= ev.0;
+//!         EvOk
+//!     }
+//! }
 //!
 //! merged_event_dispatch! {
 //!     #[derive(Default)]
@@ -148,10 +149,6 @@
 //! As all event handlers are passed around using immutable pointers, locking or cells must be
 //! used to store state in handlers.
 
-
-#[allow(unused_imports)] extern crate unhygienic;
-#[doc(hidden)] pub use unhygienic::unhygienic_item;
-#[doc(hidden)] pub use unhygienic::unhygienic_item_impl;
 #[allow(unused_imports)] use core::fmt::Debug;
 
 mod events_types;
@@ -159,5 +156,5 @@ mod events_types;
 mod interface;
 pub use interface::*;
 
-mod handler_dsl;
-pub use handler_dsl::{EventHandler, RootEventDispatch};
+mod handlers;
+pub use handlers::{EventHandler, IpcEventHandler, RootEventDispatch};
