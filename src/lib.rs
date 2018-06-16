@@ -4,6 +4,7 @@
 
 // TODO: Use custom derive rather than the merged_event_handler! macro.
 // TODO: Add a parallel set of traits for Futures
+// TODO: Implement filtering of some kind on events, and state between phases.
 
 //! A generic zero-cost event handler system. Event dispatches should get compiled down to a
 //! plain function that executes all handlers involved with no dynamic dispatches.
