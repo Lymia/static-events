@@ -1,6 +1,6 @@
 [package]
 name = "static-events"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["Lymia Aluysia <lymia@lymiahugs.com>"]
 
 description = "A library for creating zero-cost event systems."
