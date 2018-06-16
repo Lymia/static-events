@@ -1,5 +1,6 @@
 #![no_std]
-#![feature(specialization, macro_vis_matcher, macro_at_most_once_rep, allow_internal_unstable)]
+#![feature(specialization, macro_vis_matcher, macro_at_most_once_rep, allow_internal_unstable,
+           use_extern_macros)]
 
 // TODO: Use custom derive rather than the merged_eventset! macro.
 // TODO: Add a parallel set of traits for Futures
@@ -146,7 +147,8 @@
 
 
 #[allow(unused_imports)] extern crate unhygienic;
-#[doc(hidden)] pub use unhygienic::*;
+#[doc(hidden)] pub use unhygienic::unhygienic_item;
+#[doc(hidden)] pub use unhygienic::unhygienic_item_impl;
 #[allow(unused_imports)] use core::fmt::Debug; // for doc
 
 /// The generic trait that defines an event.
