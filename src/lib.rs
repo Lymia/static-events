@@ -1,5 +1,5 @@
 #![no_std]
-#![feature(specialization, overlapping_marker_traits,
+#![feature(specialization,
            macro_vis_matcher, macro_at_most_once_rep, allow_internal_unstable, use_extern_macros)]
 
 // TODO: Use custom derive rather than the merged_event_dispatch! macro.
