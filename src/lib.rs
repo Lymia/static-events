@@ -2,7 +2,7 @@
 #![feature(specialization, overlapping_marker_traits,
            macro_vis_matcher, macro_at_most_once_rep, allow_internal_unstable, use_extern_macros)]
 
-// TODO: Use custom derive rather than the merged_event_handler! macro.
+// TODO: Use custom derive rather than the merged_event_dispatch! macro.
 // TODO: Add a parallel set of traits for Futures
 // TODO: Implement filtering of some kind on events, and state between phases.
 
@@ -115,7 +115,7 @@
 //! # assert_eq!(MyEventHandler.dispatch(MyEvent(42)), 42);
 //! ```
 //!
-//! Finally, multiple event handlers may be merged using the [`merged_event_handler!`] macro:
+//! Finally, multiple event handlers may be merged using the [`merged_event_dispatch!`] macro:
 //! ```
 //! # #![feature(specialization)]
 //! # #[macro_use] extern crate static_events;
@@ -129,7 +129,7 @@
 //!     on_event: |_, ev, i| { *i *= ev.0 }
 //! });
 //!
-//! merged_event_handler! {
+//! merged_event_dispatch! {
 //!     #[derive(Default)]
 //!     struct SquaringEventHandler<T: RawEventDispatch> {
 //!         evh_a: MyEventHandler, evh_b: T,

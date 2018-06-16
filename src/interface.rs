@@ -97,7 +97,7 @@ impl <T: RawEventDispatch> EventDispatch for T {
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! merged_event_handler_internal {
+macro_rules! merged_event_dispatch_internal {
     ($ev:ident, $($field_name:ident)*) => {
         fn $ev<E: $crate::Event>(
             &self, target: &impl $crate::EventDispatch, ev: &mut E, state: &mut E::State,
@@ -122,7 +122,7 @@ macro_rules! merged_event_handler_internal {
 /// `#[derive(RawEventDispatch)]`.
 #[macro_export]
 #[allow_internal_unstable]
-macro_rules! merged_event_handler {
+macro_rules! merged_event_dispatch {
     ($(
         $(#[$meta:meta])*
         $vis:vis struct $name:ident $(<$($ty_param:ident $(: $ty_bound:path)?),* $(,)?>)? {
@@ -138,11 +138,11 @@ macro_rules! merged_event_handler {
         impl $(<$($ty_param $(: $ty_bound)?,)*>)?
             $crate::RawEventDispatch for $name $(<$($ty_param)*>)?
         {
-            merged_event_handler_internal!(init        , $($field_name)*);
-            merged_event_handler_internal!(check       , $($field_name)*);
-            merged_event_handler_internal!(before_event, $($field_name)*);
-            merged_event_handler_internal!(on_event    , $($field_name)*);
-            merged_event_handler_internal!(after_event , $($field_name)*);
+            merged_event_dispatch_internal!(init        , $($field_name)*);
+            merged_event_dispatch_internal!(check       , $($field_name)*);
+            merged_event_dispatch_internal!(before_event, $($field_name)*);
+            merged_event_dispatch_internal!(on_event    , $($field_name)*);
+            merged_event_dispatch_internal!(after_event , $($field_name)*);
         }
     )*}
 }
