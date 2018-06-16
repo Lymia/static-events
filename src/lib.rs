@@ -152,6 +152,7 @@
 #[allow(unused_imports)] use core::fmt::Debug;
 
 mod events_types;
+pub use events_types::*;
 
 mod interface;
 pub use interface::*;

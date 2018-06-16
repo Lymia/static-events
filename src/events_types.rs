@@ -58,6 +58,8 @@ macro_rules! simple_event {
     };
 }
 
+#[doc(hidden)] pub use core::result::{Result as __StaticEvents_Macro_Result};
+
 /// A helper macro to define events that can fail.
 ///
 /// The first argument is the event type, the second is the type of the event state, and the
@@ -109,21 +111,26 @@ macro_rules! failable_event {
     };
     ($ev:ty, $state:ty, $error:ty, $starting_val:expr $(,)?) => {
         impl $crate::Event for $ev {
-            type State = Result<$state, $error>;
+            type State = $crate::__StaticEvents_Macro_Result<$state, $error>;
             type StateArg = $state;
-            type MethodRetVal = Result<EventResult, $error>;
-            type RetVal = Result<$state, $error>;
-            fn starting_state(&self, _: &impl $crate::EventDispatch) -> Result<$state, $error> {
+            type MethodRetVal = $crate::__StaticEvents_Macro_Result<EventResult, $error>;
+            type RetVal = $crate::__StaticEvents_Macro_Result<$state, $error>;
+            fn starting_state(
+                &self, _: &impl $crate::EventDispatch,
+            ) -> $crate::__StaticEvents_Macro_Result<$state, $error> {
                 Ok($starting_val)
             }
-            fn borrow_state<'a>(&self, state: &'a mut Result<$state, $error>) -> &'a mut $state {
+            fn borrow_state<'a>(
+                &self, state: &'a mut $crate::__StaticEvents_Macro_Result<$state, $error>,
+            ) -> &'a mut $state {
                 state.as_mut().expect("Continuing already failed event?")
             }
-            fn default_return(&self) -> Result<EventResult, $error> {
+            fn default_return(&self) -> $crate::__StaticEvents_Macro_Result<EventResult, $error> {
                 Ok(Default::default())
             }
             fn to_event_result(
-                &self, state: &mut Result<$state, $error>, result: Result<EventResult, $error>,
+                &self, state: &mut $crate::__StaticEvents_Macro_Result<$state, $error>,
+                 result: $crate::__StaticEvents_Macro_Result<EventResult, $error>,
             ) -> EventResult {
                 match result {
                     Ok(result) => result,
@@ -134,8 +141,9 @@ macro_rules! failable_event {
                 }
             }
             fn to_return_value(
-                &self, _: &impl $crate::EventDispatch, state: Result<$state, $error>,
-            ) -> Result<$state, $error> {
+                &self, _: &impl $crate::EventDispatch, 
+                state: $crate::__StaticEvents_Macro_Result<$state, $error>,
+            ) -> $crate::__StaticEvents_Macro_Result<$state, $error> {
                 state
             }
         }
