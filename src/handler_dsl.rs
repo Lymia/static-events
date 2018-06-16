@@ -2,9 +2,11 @@ use interface::*;
 
 macro_rules! handlers {
     ($($ev:ident)*) => {
-        /// A subcomponent of a [`EventRoot`] that defines how it responds to a particular type of
-        /// [`Event`].
-        pub trait EventHandler<E: Event> : EventRoot {
+        /// The main trait used to define [`RootEventDispatch`]s.
+        ///
+        /// Each explicit implementation of this trait defines how one reacts to a particular
+        /// type of event.
+        pub trait EventHandler<E: Event> : RootEventDispatch {
             $(
                 fn $ev(
                     &self, _: &impl EventDispatch, event: &mut E, _: &mut E::StateArg,
@@ -13,7 +15,18 @@ macro_rules! handlers {
                 }
             )*
         }
-        impl <E: Event, T: EventRoot> EventHandler<E> for T {
+
+        /// A trait implements [`EventDispatch`] using [`EventHandler`]s.
+        pub trait RootEventDispatch { }
+
+        trait UniversalEventHandler<E: Event>  {
+            $(
+                fn $ev(
+                    &self, _: &impl EventDispatch, event: &mut E, _: &mut E::StateArg,
+                ) -> E::MethodRetVal;
+            )*
+        }
+        impl <E: Event, T> UniversalEventHandler<E> for T {
             $(
                 default fn $ev(
                     &self, _: &impl EventDispatch, event: &mut E, _: &mut E::StateArg,
@@ -22,19 +35,24 @@ macro_rules! handlers {
                 }
             )*
         }
-
-        /// An [`RawEventDispatch`] that defines its response to events using individual
-        /// [`EventHandler`] impls for every event it responds to.
-        pub trait EventRoot: Sized { }
-
-        impl <T: EventRoot> RawEventDispatch for T {
+        impl <E: Event, T: EventHandler<E>> UniversalEventHandler<E> for T {
             $(
-                fn $ev<E: Event>(
+                default fn $ev(
+                    &self, target: &impl EventDispatch, event: &mut E, state: &mut E::StateArg,
+                ) -> E::MethodRetVal {
+                    EventHandler::$ev(self, target, event, state)
+                }
+            )*
+        }
+
+        impl <T: RootEventDispatch> RawEventDispatch for T {
+            $(
+                default fn $ev<E: Event>(
                     &self, target: &impl EventDispatch, ev: &mut E, state: &mut E::State,
                 ) -> EventResult {
                     let result = {
                         let state_arg = ev.borrow_state(state);
-                        EventHandler::$ev(self, target, ev, state_arg)
+                        UniversalEventHandler::$ev(self, target, ev, state_arg)
                     };
                     ev.to_event_result(state, result)
                 }
@@ -141,7 +159,7 @@ macro_rules! event_handler_internal {
 /// # struct EventA; simple_event!(EventA);
 /// # struct EventB; simple_event!(EventB);
 /// # struct EventC; simple_event!(EventC);
-/// # struct MyEventHandler; impl EventRoot for MyEventHandler { }
+/// # struct MyEventHandler; impl RootEventDispatch for MyEventHandler { }
 /// event_handler!(MyEventHandler,
 ///     EventA: { /* body */ },
 ///     EventB: { /* body */ },
@@ -158,7 +176,7 @@ macro_rules! event_handler_internal {
 /// # #[macro_use] extern crate static_events;
 /// # use static_events::*;
 /// # struct Event; simple_event!(Event);
-/// # struct MyEventHandler; impl EventRoot for MyEventHandler { }
+/// # struct MyEventHandler; impl RootEventDispatch for MyEventHandler { }
 /// event_handler!(MyEventHandler,
 ///     Event: {
 ///         init        : |_, _, _| println!("init"),
@@ -179,7 +197,7 @@ macro_rules! event_handler_internal {
 /// # #[macro_use] extern crate static_events;
 /// # use static_events::*;
 /// # struct IpcEvent; ipc_event!(IpcEvent);
-/// # struct MyEventHandler; impl EventRoot for MyEventHandler { }
+/// # struct MyEventHandler; impl RootEventDispatch for MyEventHandler { }
 /// event_handler!(MyEventHandler,
 ///     IpcEvent: {
 ///         on_call: |_, _| println!("on_call"),
@@ -199,7 +217,7 @@ macro_rules! event_handler_internal {
 /// simple_event!(MyEvent, u32, 0);
 ///
 /// struct MyEventHandler;
-/// impl EventRoot for MyEventHandler { }
+/// impl RootEventDispatch for MyEventHandler { }
 /// event_handler!(MyEventHandler, MyEvent: {
 ///     on_event: |_, ev, i| { *i += ev.0 }
 /// });
@@ -217,7 +235,7 @@ macro_rules! event_handler_internal {
 /// ipc_event!(MyEvent, u32);
 ///
 /// struct MyEventHandler;
-/// impl EventRoot for MyEventHandler { }
+/// impl RootEventDispatch for MyEventHandler { }
 /// event_handler!(MyEventHandler, MyEvent: {
 ///     on_call: |_, ev| ev.0 * ev.0
 /// });
@@ -246,7 +264,7 @@ macro_rules! event_handler {
 ///
 /// This uses the same syntax as [`event_handler!`], except a visibility modifier or attributes
 /// can be placed in front. It automatically declares an empty struct and [`Copy`], [`Clone`],
-/// [`Debug`], [`Default`], and [`EventRoot`] impls for it.
+/// [`Debug`], [`Default`], and [`RootEventDispatch`] impls for it.
 ///
 /// # Example
 ///
@@ -281,7 +299,7 @@ macro_rules! simple_event_handler {
         #[derive(Copy, Clone, Debug, Default)]
         $(#[$meta])*
         $vis struct $name;
-        impl $crate::EventRoot for $name { }
+        impl $crate::RootEventDispatch for $name { }
         event_handler!($name, $(
             $event: {$($call_name: |$($bind,)*| $ev_func,)*},
         )*);

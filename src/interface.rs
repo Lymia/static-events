@@ -1,3 +1,5 @@
+#[allow(unused_imports)] use RootEventDispatch;
+
 /// The result of a stage of a event handler.
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub enum EventResult {
@@ -66,10 +68,11 @@ macro_rules! raw_event_dispatch {
 }
 raw_event_dispatch!(init check before_event on_event after_event);
 
-/// A handler that receives [`Event`]s and dispatches it to various handlers. This is not meant to
-/// be defined directly, and instead [`EventDispatch`]s should be defined through [`EventRoot`],
-/// or [`merged_event_handler!`].
-// TODO: Update docs
+/// A handler that receives [`Event`]s and processes them in some way.
+///
+/// This is not meant to define be defined directly. Derived event handlers should instead be
+/// defined through the [`RootEventDispatch`] interface, and root event handlers should be
+/// defined through [`RootEventDispatch`].
 pub trait EventDispatch {
     /// Dispatches an event and returns its result.
     fn dispatch<E: Event>(&self, _: E) -> E::RetVal;

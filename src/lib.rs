@@ -21,16 +21,17 @@
 //! Events can be any type that implements [`Event`], and the type itself is used as the key
 //! that event handlers to distinguish different events.
 //!
-//! Event handlers are primarily defined by types that implement [`EventRoot`], which provides
-//! a default noop [`EventHandler`] implementation for all [`Event`]s, which can be further
-//! overwritten with explicit [`EventHandler`] implementations.
+//! Events are passed to [`EventDispatch`]s, which receive events, and eventually dispatch them
+//! to various event handlers.
 //!
-//! [`RawEventDispatch`] is a further abstraction over [`EventRoot`], that has methods that are
-//! individually generic over all [`Event`]s, rather than having an impl of [`EventHandler`]
-//! for all [`Event`]s like [`EventRoot`].
+//! [`EventDispatch`] is primarily implemented by types that implement [`RootEventDispatch`].
+//! Though the trait contains no items, it creates an [`EventDispatch`] implementation that
+//! dispatches events to the individual [`EventHandler`] implementation for the event type,
+//! should one exist, and ignore it otherwise.
 //!
-//! Finally, [`EventDispatch`] is the highest level event handling trait, with a function that
-//! takes a [`Event`], and returns its `RetVal`.
+//! [`RawEventDispatch`] exists as a middle level between [`RootEventDispatch`] and
+//! [`EventDispatch`], allowing things such as filtering of events, and merging multiple
+//! [`RawEventDispatch`]s into a single one.
 //!
 //! # Event dispatch
 //!
@@ -41,8 +42,8 @@
 //! a temporary state value. This will be passed to all event handlers, and is used to store
 //! transient state and as an accumulator for the final return value.
 //!
-//! The lower level event handlers, [`EventHandler`] and [`RawEventDispatch`] each contain 5
-//! methods that are executed in the following order:<br>
+//! The low level event handlers components, [`EventHandler`] and [`RawEventDispatch`] each
+//! contain 5 methods that are executed in the following order:<br>
 //! `init` -> `check` -> `before_event` -> `on_event` -> `after_event`
 //!
 //! They take both the event itself and the current state as mutable borrows, and return a
@@ -77,7 +78,7 @@
 //!
 //! # Defining event handlers
 //!
-//! Individual event handlers are defined using a combination of [`EventRoot`] (a marker trait),
+//! Individual event handlers are defined using a combination of [`RootEventDispatch`],
 //! and any number of [`EventHandler`] implementations:
 //!
 //! ```
@@ -87,7 +88,7 @@
 //! # struct MyEvent(u32);
 //! # simple_event!(MyEvent, u32, 0);
 //! struct MyEventHandler;
-//! impl EventRoot for MyEventHandler { }
+//! impl RootEventDispatch for MyEventHandler { }
 //! impl EventHandler<MyEvent> for MyEventHandler {
 //!     fn on_event(&self, _: &impl EventDispatch, ev: &mut MyEvent, i: &mut u32) -> EventResult {
 //!         *i += ev.0;
@@ -157,4 +158,4 @@ mod interface;
 pub use interface::*;
 
 mod handler_dsl;
-pub use handler_dsl::*;
+pub use handler_dsl::{EventHandler, RootEventDispatch};
