@@ -60,22 +60,23 @@
 //!
 //! # Defining events
 //!
-//! Any module can define an event. Events are normal types that implement the [`Event`] trait,
-//! which can be declared with various macros;
+//! Any module can define an event. Events are normal types that implement the [`Event`] trait.
+//!
+//! An hierarchy of helper traits exists for defining event types:
+//! * [`Event`] exposes the full power of the events system, and is required for events that
+//!   only pass part of the dispatch state into handlers, or expect handlers to return a different
+//!   type than usual.
+//! * [`SimpleInterfaceEvent`] is required for events for event that return a different type from
+//!   their internal state.
+//! * [`SimpleEvent`] is the most general common type of event. It directly returns its internal
+//!   state to the caller.
+//! * [`VoidEvent`] is the simplest type of event, that maintains no state and returns no value.
+//!
+//! In addition, helper macros exist to help define specific types of common events;
 //! * [`simple_event!`] for events that directly return their state to the caller, or do not
 //!   use state at all.
 //! * [`failable_event!`] for events that can fail and return [`Result`]s.
 //! * [`ipc_event!`] for events that should only have one listener processing it.
-//!
-//! ```
-//! # #[macro_use] extern crate static_events;
-//! # use static_events::*;
-//! pub struct MyEvent(u32);
-//! simple_event!(MyEvent, u32, 0);
-//! ```
-//!
-//! While [`Event`] is stable API, and can be manually implemented, this should only be done in
-//! special cases.
 //!
 //! # Defining event handlers
 //!

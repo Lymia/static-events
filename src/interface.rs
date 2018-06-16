@@ -36,6 +36,67 @@ pub trait Event {
     fn to_return_value(&self, _: &impl EventDispatch, _: Self::State) -> Self::RetVal;
 }
 
+/// An [`Event`] that does not use the `MethodRetVal` or `StateArg` mechanisms.
+pub trait SimpleInterfaceEvent {
+    /// The type of the state maintained between event handler calls.
+    type State;
+    /// The ultimate return type of a call to this event.
+    type RetVal;
+
+    /// The starting state when an event is dispatched.
+    fn starting_state(&self, _: &impl EventDispatch) -> Self::State;
+    /// Derives the output value of the event dispatch from the current state.
+    fn to_return_value(&self, _: &impl EventDispatch, _: Self::State) -> Self::RetVal;
+}
+impl <T : SimpleInterfaceEvent> Event for T {
+    type State = T::State;
+    type StateArg = T::State;
+    type MethodRetVal = EventResult;
+    type RetVal = T::RetVal;
+
+    fn starting_state(&self, target: &impl EventDispatch) -> T::State {
+        SimpleInterfaceEvent::starting_state(self, target)
+    }
+    fn borrow_state<'a>(&self, state: &'a mut T::State) -> &'a mut T::State {
+        state
+    }
+    fn default_return(&self) -> EventResult {
+        EvOk
+    }
+    fn to_event_result(&self, _: &mut T::State, result: EventResult) -> EventResult {
+        result
+    }
+    fn to_return_value(&self, target: &impl EventDispatch, state: T::State) -> T::RetVal {
+        SimpleInterfaceEvent::to_return_value(self, target, state)
+    }
+}
+
+/// An [`Event`] that returns `State` directly when called.
+pub trait SimpleEvent {
+    /// The type of the state maintained between event handler calls and returned from this event.
+    type State;
+    /// The starting state when an event is dispatched.
+    fn starting_state(&self, _: &impl EventDispatch) -> Self::State;
+}
+impl <T : SimpleEvent> SimpleInterfaceEvent for T {
+    type State = T::State;
+    type RetVal = T::State;
+
+    fn starting_state(&self, target: &impl EventDispatch) -> T::State {
+        SimpleEvent::starting_state(self, target)
+    }
+    fn to_return_value(&self, _: &impl EventDispatch, state: T::State) -> T::State {
+        state
+    }
+}
+
+/// An [`Event`] that returns no value adn stores no state.
+pub trait VoidEvent { }
+impl <T : VoidEvent> SimpleEvent for T {
+    type State = ();
+    fn starting_state(&self, _: &impl EventDispatch) {  }
+}
+
 impl Default for EventResult {
     fn default() -> Self {
         EvOk

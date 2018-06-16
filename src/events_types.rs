@@ -30,27 +30,10 @@ macro_rules! simple_event {
         simple_event!($ev, $state, Default::default());
     };
     ($ev:ty, $state:ty, $starting_val:expr $(,)?) => {
-        impl $crate::Event for $ev {
+        impl $crate::SimpleEvent for $ev {
             type State = $state;
-            type StateArg = $state;
-            type MethodRetVal = EventResult;
-            type RetVal = $state;
             fn starting_state(&self, _: &impl $crate::EventDispatch) -> $state {
                 $starting_val
-            }
-            fn borrow_state<'a>(&self, state: &'a mut $state) -> &'a mut $state {
-                state
-            }
-            fn default_return(&self) -> EventResult {
-                Default::default()
-            }
-            fn to_event_result(&self, _: &mut $state, result: EventResult) -> EventResult {
-                result
-            }
-            fn to_return_value(
-                &self, _: &impl $crate::EventDispatch, state: $state,
-            ) -> $state {
-                state
             }
         }
     };
@@ -65,7 +48,7 @@ macro_rules! simple_event {
 /// If the fourth argument is omitted, it is assumed to be [`Default::default`].
 ///
 /// Handlers for events defined with this macro return a `Result<EventResult, E>`, and return
-/// the error to the caller of the event, cancelling all further events.
+/// errors to the caller of the event, cancelling all further handlers.
 ///
 /// # Example
 ///
@@ -142,22 +125,11 @@ macro_rules! ipc_event {
         ipc_event!($ev, ());
     };
     ($ev:ty, $state:ty $(,)?) => {
-        impl $crate::Event for $ev {
+        impl $crate::SimpleInterfaceEvent for $ev {
             type State = Option<$state>;
-            type StateArg = Option<$state>;
-            type MethodRetVal = EventResult;
             type RetVal = $state;
             fn starting_state(&self, _: &impl $crate::EventDispatch) -> Option<$state> {
                 None
-            }
-            fn borrow_state<'a>(&self, state: &'a mut Option<$state>) -> &'a mut Option<$state> {
-                state
-            }
-            fn default_return(&self) -> EventResult {
-                Default::default()
-            }
-            fn to_event_result(&self, _: &mut Option<$state>, result: EventResult) -> EventResult {
-                result
             }
             fn to_return_value(
                 &self, _: &impl $crate::EventDispatch, state: Option<$state>,
