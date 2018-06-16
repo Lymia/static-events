@@ -2,6 +2,7 @@
 #![feature(specialization, macro_vis_matcher, macro_at_most_once_rep, allow_internal_unstable)]
 
 // TODO: Use custom derive rather than the merged_eventset! macro.
+// TODO: Add a parallel set of traits for Futures
 
 //! A generic zero-cost event handler system. Event dispatches should get compiled down to a
 //! plain function that executes all handlers involved with no dynamic dispatches.
@@ -143,6 +144,9 @@
 //! As all event handlers are passed around using immutable pointers, locking or cells must be
 //! used to store state in handlers.
 
+
+#[allow(unused_imports)] extern crate unhygienic;
+#[doc(hidden)] pub use unhygienic::*;
 #[allow(unused_imports)] use core::fmt::Debug; // for doc
 
 /// The generic trait that defines an event.
@@ -433,39 +437,69 @@ macro_rules! event_handler_internal {
         compile_error!(concat!("Unknown event handler stage '", stringify!($unknown), "'."))
     };
 
-    ($event:ty, on_call: |$target:pat, $ev:pat,| $ev_func:expr) => {
+    ($ty:ty, $event:ty, on_call: |$target:pat, $ev:pat,| $ev_func:expr) => {
         fn on_event(
-            &self, __static_event__generated_target: &impl $crate::EventDispatch,
-                   __static_event__generated_ev: &mut $event,
-                   __static_event__generated_state: &mut Option<<$event as $crate::Event>::RetVal>,
+            &self, target: &impl $crate::EventDispatch,
+                   ev: &mut $event,
+                   state: &mut Option<<$event as $crate::Event>::RetVal>,
         ) -> <$event as $crate::Event>::MethodRetVal {
-            if __static_event__generated_state.is_some() {
+            use $crate::{Event as __static_events__generated_Event,
+                         EventDispatch as __static_events__generated_EventDispatch};
+            trait SelfHack {
+                fn callback(
+                    &self, _: &impl $crate::EventDispatch,
+                           _: &mut $event,
+                ) -> <$event as $crate::Event>::RetVal;
+            }
+            unhygienic_item! {
+                impl SelfHack for $ty {
+                    fn callback(
+                        &self, $target: &impl __static_events__generated_EventDispatch,
+                               $ev: &mut $event,
+                    ) -> <$event as __static_events__generated_Event>::RetVal {
+                        $ev_func
+                    }
+                }
+            }
+            if state.is_some() {
                 panic!(concat!("Duplicate listeners responding to '", stringify!($event), "'."));
             }
-            let callback =
-                |$target, $ev: &mut $event| -> <$event as $crate::Event>::RetVal { $ev_func };
-            let call_result = callback(__static_event__generated_target,
-                                       __static_event__generated_ev);
-            *__static_event__generated_state = Some(call_result);
+            let call_result = <Self as SelfHack>::callback(self, target, ev);
+            *state = Some(call_result);
             Default::default()
         }
     };
-    ($event:ty, $call_name:ident: |$target:pat, $ev:pat, $state:pat,| $ev_func:expr) => {
+    ($ty:ty, $event:ty, $call_name:ident: |$target:pat, $ev:pat, $state:pat,| $ev_func:expr) => {
         event_handler_internal!(@verify_name $call_name);
         fn $call_name(
-            &self, __static_event__generated_target: &impl $crate::EventDispatch,
-                   __static_event__generated_ev: &mut $event,
-                   __static_event__generated_state: &mut <$event as $crate::Event>::StateArg,
+            &self, target: &impl $crate::EventDispatch,
+                   ev: &mut $event,
+                   state: &mut <$event as $crate::Event>::StateArg,
         ) -> <$event as $crate::Event>::MethodRetVal {
-            let callback =
-                |$target, $ev: &mut $event, $state: &mut <$event as $crate::Event>::StateArg|
-                    -> <$event as $crate::Event>::MethodRetVal { $ev_func.into() };
-            callback(__static_event__generated_target,
-                     __static_event__generated_ev,
-                     __static_event__generated_state)
+            use $crate::{Event as __static_events__generated_Event,
+                         EventDispatch as __static_events__generated_EventDispatch};
+            trait SelfHack {
+                fn callback(
+                    &self, _: &impl $crate::EventDispatch,
+                           _: &mut $event,
+                           _: &mut <$event as $crate::Event>::StateArg,
+                ) -> <$event as $crate::Event>::MethodRetVal;
+            }
+            unhygienic_item! {
+                impl SelfHack for $ty {
+                    fn callback(
+                        &self, $target: &impl __static_events__generated_EventDispatch,
+                               $ev: &mut $event,
+                               $state: &mut <$event as __static_events__generated_Event>::StateArg,
+                    ) -> <$event as __static_events__generated_Event>::MethodRetVal {
+                        $ev_func.into()
+                    }
+                }
+            }
+            <Self as SelfHack>::callback(self, target, ev, state)
         }
     };
-    ($event:ty, $call_name:ident: |$($bind:pat,)*| $ev_func:expr) => {
+    ($ty:ty, $event:ty, $call_name:ident: |$($bind:pat,)*| $ev_func:expr) => {
         event_handler_internal!(@verify_name $call_name
             compile_error!(concat!("Wrong number of parameters for event handler stage '",
                                    stringify!($call_name), "'."))
@@ -584,7 +618,7 @@ macro_rules! event_handler {
         $(,)?
     ) => {$(
         impl $crate::EventHandler<$event> for $name {
-            $( event_handler_internal!($event, $call_name: |$($bind,)*| $ev_func); )*
+            $( event_handler_internal!($name, $event, $call_name: |$($bind,)*| $ev_func); )*
         }
     )*};
 }
