@@ -1,6 +1,5 @@
 #![no_std]
-#![feature(specialization,
-           macro_vis_matcher, macro_at_most_once_rep, allow_internal_unstable, use_extern_macros)]
+#![feature(specialization, allow_internal_unstable)]
 
 // TODO: Use custom derive rather than the merged_event_dispatch! macro.
 // TODO: Add a parallel set of traits for Futures
@@ -152,10 +151,10 @@
 #[allow(unused_imports)] use core::fmt::Debug;
 
 mod events_types;
-pub use events_types::*;
+pub use crate::events_types::*;
 
 mod interface;
-pub use interface::*;
+pub use crate::interface::*;
 
 mod handlers;
-pub use handlers::{EventHandler, IpcEventHandler, RootEventDispatch};
+pub use crate::handlers::{EventHandler, IpcEventHandler, RootEventDispatch};

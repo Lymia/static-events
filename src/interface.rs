@@ -1,4 +1,4 @@
-#[allow(unused_imports)] use RootEventDispatch;
+#[allow(unused_imports)] use crate::RootEventDispatch;
 
 /// The result of a stage of a event handler.
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
@@ -159,7 +159,7 @@ impl <T: RawEventDispatch> EventDispatch for T {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! merged_event_dispatch_internal {
-    ($ev:ident, $($field_name:ident)*) => {
+    (@method, $ev:ident, $($field_name:ident)*) => {
         fn $ev<E: $crate::Event>(
             &self, target: &impl $crate::EventDispatch, ev: &mut E, state: &mut E::State,
         ) -> $crate::EventResult {
@@ -199,11 +199,11 @@ macro_rules! merged_event_dispatch {
         impl $(<$($ty_param $(: $ty_bound)?,)*>)?
             $crate::RawEventDispatch for $name $(<$($ty_param)*>)?
         {
-            merged_event_dispatch_internal!(init        , $($field_name)*);
-            merged_event_dispatch_internal!(check       , $($field_name)*);
-            merged_event_dispatch_internal!(before_event, $($field_name)*);
-            merged_event_dispatch_internal!(on_event    , $($field_name)*);
-            merged_event_dispatch_internal!(after_event , $($field_name)*);
+            merged_event_dispatch_internal!(@method, init        , $($field_name)*);
+            merged_event_dispatch_internal!(@method, check       , $($field_name)*);
+            merged_event_dispatch_internal!(@method, before_event, $($field_name)*);
+            merged_event_dispatch_internal!(@method, on_event    , $($field_name)*);
+            merged_event_dispatch_internal!(@method, after_event , $($field_name)*);
         }
     )*}
 }

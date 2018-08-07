@@ -1,4 +1,4 @@
-use interface::*;
+use crate::interface::*;
 
 macro_rules! handlers {
     (

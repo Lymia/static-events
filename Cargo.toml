@@ -1,7 +1,10 @@
+cargo-features = ["edition"]
+
 [package]
 name = "static-events"
 version = "0.2.0"
 authors = ["Lymia Aluysia <lymia@lymiahugs.com>"]
+edition = "2018"
 
 description = "A library for creating zero-cost event systems."
 keywords = ["events", "static"]
