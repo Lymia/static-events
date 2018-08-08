@@ -1,5 +1,5 @@
 #![no_std]
-#![feature(specialization, allow_internal_unstable)]
+#![feature(nll, specialization, allow_internal_unstable)]
 
 // TODO: Use custom derive rather than the merged_event_dispatch! macro.
 // TODO: Add a parallel set of traits for Futures
@@ -148,6 +148,9 @@
 //! As all event handlers are passed around using immutable pointers, locking or cells must be
 //! used to store state in handlers.
 
+#[cfg(feature = "std")] extern crate parking_lot;
+#[cfg(feature = "std")] extern crate std;
+
 #[allow(unused_imports)] use core::fmt::Debug;
 
 mod events_types;
@@ -158,3 +161,6 @@ pub use crate::interface::*;
 
 mod handlers;
 pub use crate::handlers::{EventHandler, IpcEventHandler, RootEventDispatch};
+
+#[cfg(feature = "std")] mod handle;
+#[cfg(feature = "std")] pub use crate::handle::*;
