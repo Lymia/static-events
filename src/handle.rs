@@ -1,23 +1,23 @@
 use parking_lot::RwLock;
 use std::sync::Arc;
 
-use crate::interface::EventDispatch;
+use crate::interface::SyncEventDispatch;
 
 #[derive(Debug)]
-enum Status<D: EventDispatch> {
+enum Status<D: SyncEventDispatch> {
     Active(D),
     Shutdown,
 }
 
 /// A [`EventDispatch`] wrapped for use in applications that dispatch events concurrently.
 #[derive(Debug)]
-pub struct DispatchHandle<D: EventDispatch + Send + Sync>(Arc<RwLock<Status<D>>>);
-impl <D: EventDispatch + Send + Sync> Clone for DispatchHandle<D> {
+pub struct DispatchHandle<D: SyncEventDispatch>(Arc<RwLock<Status<D>>>);
+impl <D: SyncEventDispatch> Clone for DispatchHandle<D> {
     fn clone(&self) -> Self {
         DispatchHandle(self.0.clone())
     }
 }
-impl <D: EventDispatch + Send + Sync> DispatchHandle<D> {
+impl <D: SyncEventDispatch> DispatchHandle<D> {
     pub fn new(d: D) -> DispatchHandle<D> {
         DispatchHandle(Arc::new(RwLock::new(Status::Active(d))))
     }

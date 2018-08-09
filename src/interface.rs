@@ -207,3 +207,7 @@ macro_rules! merged_event_dispatch {
         }
     )*}
 }
+
+/// A [`EventDispatch`] that can be shared between threads.
+pub trait SyncEventDispatch: EventDispatch + Sync + Send + 'static { }
+impl <T: EventDispatch + Sync + Send + 'static> SyncEventDispatch for T { }
