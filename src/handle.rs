@@ -10,8 +10,13 @@ enum Status<D: EventDispatch> {
 }
 
 /// A [`EventDispatch`] wrapped for use in applications that dispatch events concurrently.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct DispatchHandle<D: EventDispatch + Send + Sync>(Arc<RwLock<Status<D>>>);
+impl <D: EventDispatch + Send + Sync> Clone for DispatchHandle<D> {
+    fn clone(&self) -> Self {
+        DispatchHandle(self.0.clone())
+    }
+}
 impl <D: EventDispatch + Send + Sync> DispatchHandle<D> {
     pub fn new(d: D) -> DispatchHandle<D> {
         DispatchHandle(Arc::new(RwLock::new(Status::Active(d))))
