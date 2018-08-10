@@ -181,9 +181,16 @@ macro_rules! merged_event_dispatch_internal {
 ///
 /// At some point, this will be replaced with a procedural derive, i.e.
 /// `#[derive(RawEventDispatch)]`.
+///
+/// # Type parameters
+///
+/// Due to the limitations of macros, only a restricted subset of type parameter syntax
+/// is normally available for use in this macro. In particular, `+` cannot be used in the
+/// trait bounds. For example, `Sync + Send` won't be recognized.
 #[macro_export]
 #[allow_internal_unstable]
 macro_rules! merged_event_dispatch {
+    // TODO: Implement a () syntax around trait bounds as a workaround for macro limiations.
     ($(
         $(#[$meta:meta])*
         $vis:vis struct $name:ident $(<$($ty_param:ident $(: $ty_bound:path)?),* $(,)?>)? {
