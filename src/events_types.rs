@@ -42,19 +42,28 @@
 #[macro_export]
 #[allow_internal_unstable]
 macro_rules! simple_event {
-    ($([<$($bounds:tt)*>])? $ev:ty $(,)?) => {
-        simple_event!($(<$($bounds)*>)? $ev, (), ());
+    ([$($bounds:tt)*] $ev:ty $(,)?) => {
+        simple_event!([$($bounds)*] $ev, (), ());
     };
-    ($([<$($bounds:tt)*>])? $ev:ty, $state:ty $(,)?) => {
-        simple_event!($(<$($bounds)*>)? $ev, $state, Default::default());
+    ([$($bounds:tt)*] $ev:ty, $state:ty $(,)?) => {
+        simple_event!([$($bounds)*] $ev, $state, Default::default());
     };
-    ($([<$($bounds:tt)*>])? $ev:ty, $state:ty, $starting_val:expr $(,)?) => {
-        impl $(<$($bounds)*>)? $crate::SimpleEvent for $ev {
+    ([$($bounds:tt)*] $ev:ty, $state:ty, $starting_val:expr $(,)?) => {
+        impl $($bounds)* $crate::SimpleEvent for $ev {
             type State = $state;
             fn starting_state(&self, _: &impl $crate::EventDispatch) -> $state {
                 $starting_val
             }
         }
+    };
+    ($ev:ty $(,)?) => {
+        simple_event!([] $ev);
+    };
+    ($ev:ty, $state:ty $(,)?) => {
+        simple_event!([] $ev, $state);
+    };
+    ($ev:ty, $state:ty, $starting_val:expr $(,)?) => {
+        simple_event!([] $ev, $state, $starting_val);
     };
 }
 
@@ -106,11 +115,11 @@ macro_rules! simple_event {
 #[macro_export]
 #[allow_internal_unstable]
 macro_rules! failable_event {
-    ($([<$($bounds:tt)*>])? $ev:ty, $state:ty, $error:ty $(,)?) => {
-        failable_event!($(<$($bounds)*>)? $ev, $state, $error, Default::default());
+    ([$($bounds:tt)*] $ev:ty, $state:ty, $error:ty $(,)?) => {
+        failable_event!([$($bounds)*] $ev, $state, $error, Default::default());
     };
-    ($([<$($bounds:tt)*>])? $ev:ty, $state:ty, $error:ty, $starting_val:expr $(,)?) => {
-        impl $(<$($bounds)*>)? $crate::Event for $ev {
+    ([$($bounds:tt)*] $ev:ty, $state:ty, $error:ty, $starting_val:expr $(,)?) => {
+        impl $($bounds)* $crate::Event for $ev {
             type State = $crate::__StaticEvents_Macro_Result<$state, $error>;
             type StateArg = $state;
             type MethodRetVal = $crate::__StaticEvents_Macro_Result<EventResult, $error>;
@@ -147,6 +156,12 @@ macro_rules! failable_event {
                 state
             }
         }
+    };
+    ($ev:ty, $state:ty, $error:ty $(,)?) => {
+        failable_event!([] $ev, $state, $error, Default::default());
+    };
+    ($ev:ty, $state:ty, $error:ty, $starting_val:expr $(,)?) => {
+        failable_event!([] $ev, $state, $error, $starting_val);
     };
 }
 
@@ -192,11 +207,11 @@ macro_rules! failable_event {
 #[macro_export]
 #[allow_internal_unstable]
 macro_rules! ipc_event {
-    ($([<$($bounds:tt)*>])? $ev:ty $(,)?) => {
-        ipc_event!($(<$($bounds)*>)? $ev, ());
+    ([$($bounds:tt)*] $ev:ty $(,)?) => {
+        ipc_event!([$($bounds)*] $ev, ());
     };
-    ($([<$($bounds:tt)*>])? $ev:ty, $state:ty $(,)?) => {
-        impl $(<$($bounds)*>)? $crate::SimpleInterfaceEvent for $ev {
+    ([$($bounds:tt)*] $ev:ty, $state:ty $(,)?) => {
+        impl $($bounds)* $crate::SimpleInterfaceEvent for $ev {
             type State = Option<$state>;
             type RetVal = $state;
             fn starting_state(&self, _: &impl $crate::EventDispatch) -> Option<$state> {
@@ -209,4 +224,10 @@ macro_rules! ipc_event {
             }
         }
     };
+    ($ev:ty $(,)?) => {
+        ipc_event!([] $ev);
+    };
+    ($ev:ty, $state:ty $(,)?) => {
+        ipc_event!([] $ev, $state);
+    }
 }
