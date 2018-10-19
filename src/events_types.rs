@@ -1,3 +1,5 @@
+// TODO: Document `[T: Bounds]` syntax.
+
 /// A helper macro to define events that directly return their state with no further processing.
 ///
 /// The first argument is the event type, the second is the type of the event state, and the
@@ -49,7 +51,7 @@ macro_rules! simple_event {
         simple_event!([$($bounds)*] $ev, $state, Default::default());
     };
     ([$($bounds:tt)*] $ev:ty, $state:ty, $starting_val:expr $(,)?) => {
-        impl $($bounds)* $crate::SimpleEvent for $ev {
+        impl <$($bounds)*> $crate::SimpleEvent for $ev {
             type State = $state;
             fn starting_state(&self, _: &impl $crate::EventDispatch) -> $state {
                 $starting_val
@@ -119,7 +121,7 @@ macro_rules! failable_event {
         failable_event!([$($bounds)*] $ev, $state, $error, Default::default());
     };
     ([$($bounds:tt)*] $ev:ty, $state:ty, $error:ty, $starting_val:expr $(,)?) => {
-        impl $($bounds)* $crate::Event for $ev {
+        impl <$($bounds)*> $crate::Event for $ev {
             type State = $crate::__StaticEvents_Macro_Result<$state, $error>;
             type StateArg = $state;
             type MethodRetVal = $crate::__StaticEvents_Macro_Result<EventResult, $error>;
@@ -210,16 +212,16 @@ macro_rules! ipc_event {
     ([$($bounds:tt)*] $ev:ty $(,)?) => {
         ipc_event!([$($bounds)*] $ev, ());
     };
-    ([$($bounds:tt)*] $ev:ty, $state:ty $(,)?) => {
-        impl $($bounds)* $crate::SimpleInterfaceEvent for $ev {
-            type State = Option<$state>;
-            type RetVal = $state;
-            fn starting_state(&self, _: &impl $crate::EventDispatch) -> Option<$state> {
+    ([$($bounds:tt)*] $ev:ty, $ret_val:ty $(,)?) => {
+        impl <$($bounds)*> $crate::SimpleInterfaceEvent for $ev {
+            type State = Option<$ret_val>;
+            type RetVal = $ret_val;
+            fn starting_state(&self, _: &impl $crate::EventDispatch) -> Option<$ret_val> {
                 None
             }
             fn to_return_value(
-                &self, _: &impl $crate::EventDispatch, state: Option<$state>,
-            ) -> $state {
+                &self, _: &impl $crate::EventDispatch, state: Option<$ret_val>,
+            ) -> $ret_val {
                 state.expect(concat!("No listeners responded to ", stringify!($ev), "!"))
             }
         }
@@ -227,7 +229,7 @@ macro_rules! ipc_event {
     ($ev:ty $(,)?) => {
         ipc_event!([] $ev);
     };
-    ($ev:ty, $state:ty $(,)?) => {
-        ipc_event!([] $ev, $state);
+    ($ev:ty, $ret_val:ty $(,)?) => {
+        ipc_event!([] $ev, $ret_val);
     }
 }
