@@ -1,5 +1,3 @@
-cargo-features = ["edition"]
-
 [package]
 name = "static-events"
 version = "0.2.0"

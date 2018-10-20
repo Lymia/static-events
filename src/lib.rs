@@ -148,9 +148,6 @@
 //! As all event handlers are passed around using immutable pointers, locking or cells must be
 //! used to store state in handlers.
 
-#[cfg(feature = "std")] extern crate parking_lot;
-#[cfg(feature = "std")] extern crate std;
-
 #[allow(unused_imports)] use core::fmt::Debug;
 
 mod events_types;

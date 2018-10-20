@@ -1,5 +1,7 @@
+extern crate std;
+
 use parking_lot::RwLock;
-use std::sync::Arc;
+use self::std::sync::Arc;
 
 use crate::interface::SyncEventDispatch;
 
