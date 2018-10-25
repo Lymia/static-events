@@ -136,9 +136,13 @@ raw_event_dispatch!(init check before_event on_event after_event);
 /// This is not meant to define be defined directly. Derived event handlers should instead be
 /// defined through the [`RootEventDispatch`] interface, and root event handlers should be
 /// defined through [`RootEventDispatch`].
-pub trait EventDispatch: Any {
+pub trait EventDispatch: Sized + Any {
     /// Dispatches an event and returns its result.
     fn dispatch<E: Event>(&self, _: E) -> E::RetVal;
+
+    fn downcast_ref<D: 'static>(&self) -> Option<&D> {
+        (self as &Any).downcast_ref::<D>()
+    }
 }
 impl <T: RawEventDispatch> EventDispatch for T {
     fn dispatch<E: Event>(&self, mut ev: E) -> E::RetVal {
@@ -219,4 +223,4 @@ macro_rules! merged_event_dispatch {
 
 /// A [`EventDispatch`] that can be shared between threads.
 pub trait SyncEventDispatch: EventDispatch + Sync + Send + 'static { }
-impl <T: EventDispatch + Sync + Send + 'static> SyncEventDispatch for T { }
+impl <T: EventDispatch + Sync + Send> SyncEventDispatch for T { }
