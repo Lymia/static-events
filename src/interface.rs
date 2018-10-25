@@ -1,5 +1,7 @@
 #[allow(unused_imports)] use crate::RootEventDispatch;
 
+use core::any::Any;
+
 /// The result of a stage of a event handler.
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub enum EventResult {
@@ -118,7 +120,7 @@ macro_rules! raw_event_dispatch {
         ///
         /// The methods are called in the following order:<br>
         /// `init` -> `check` -> `before_event` -> `on_event` -> `after_event`
-        pub trait RawEventDispatch: Sized {
+        pub trait RawEventDispatch: Any + Sized {
             $(
                 fn $ev<E: Event>(
                     &self, target: &impl EventDispatch, ev: &mut E, state: &mut E::State,
@@ -134,7 +136,7 @@ raw_event_dispatch!(init check before_event on_event after_event);
 /// This is not meant to define be defined directly. Derived event handlers should instead be
 /// defined through the [`RootEventDispatch`] interface, and root event handlers should be
 /// defined through [`RootEventDispatch`].
-pub trait EventDispatch {
+pub trait EventDispatch: Any {
     /// Dispatches an event and returns its result.
     fn dispatch<E: Event>(&self, _: E) -> E::RetVal;
 }

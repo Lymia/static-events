@@ -59,7 +59,7 @@ macro_rules! handlers {
         }
 
         /// A trait implements [`EventDispatch`] using [`EventHandler`]s.
-        pub trait RootEventDispatch { }
+        pub trait RootEventDispatch: 'static { }
 
         trait UniversalEventHandler<E: Event> {$(
             fn $ev(
