@@ -149,6 +149,7 @@
 //! used to store state in handlers.
 
 #[allow(unused_imports)] use core::fmt::Debug;
+#[cfg(feature = "std")] extern crate std;
 
 mod events_types;
 pub use crate::events_types::*;
