@@ -1,0 +1,23 @@
+[package]
+name = "static-events"
+version = "0.2.0"
+authors = ["Lymia Aluysia <lymia@lymiahugs.com>"]
+edition = "2018"
+
+description = "A library for creating zero-cost event systems."
+keywords = ["events", "static"]
+categories = ["rust-patterns"]
+
+documentation = "https://docs.rs/static-events/"
+repository = "https://github.com/Lymia/static-events"
+readme = "../README.md"
+
+license = "MIT/Apache-2.0"
+
+[features]
+std = ["parking_lot"]
+default = ["std"]
+
+[dependencies]
+parking_lot = { version = "0.6.3", optional = true }
+static-events_derive = { version = "0.2.0", path = "../static-events_derive" }

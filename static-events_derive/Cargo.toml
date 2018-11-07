@@ -1,0 +1,22 @@
+[package]
+name = "static-events_derive"
+version = "0.2.0"
+authors = ["Lymia Aluysia <lymia@lymiahugs.com>"]
+edition = "2018"
+
+description = "An internal helper crate for static-events."
+keywords = ["events", "static"]
+categories = ["rust-patterns"]
+
+documentation = "https://docs.rs/static-events/"
+repository = "https://github.com/Lymia/static-events"
+
+license = "MIT/Apache-2.0"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = "0.15.18"
+quote = "0.6.9"
+proc-macro2 = { version = "0.4.20", features = ["nightly"] }

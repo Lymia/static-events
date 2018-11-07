@@ -162,65 +162,6 @@ impl <T: RawEventDispatch> EventDispatch for T {
     }
 }
 
-#[doc(hidden)]
-#[macro_export]
-macro_rules! merged_event_dispatch_internal {
-    (@method, $ev:ident, $($field_name:ident)*) => {
-        fn $ev<E: $crate::Event>(
-            &self, target: &impl $crate::EventDispatch, ev: &mut E, state: &mut E::State,
-        ) -> $crate::EventResult {
-            $(
-                match $crate::RawEventDispatch::$ev(&self.$field_name, target, ev, state) {
-                    $crate::EvOk => { }
-                    e => return e,
-                }
-            )*
-            $crate::EvOk
-        }
-    }
-}
-
-/// Creates an [`RawEventDispatch`] implementation for a struct by merging several
-/// [`RawEventDispatch`]s. Each field of the struct must implement [`RawEventDispatch`].
-///
-/// The individual handlers will be called in the order that the fields are declared in.
-///
-/// At some point, this will be replaced with a procedural derive, i.e.
-/// `#[derive(RawEventDispatch)]`.
-///
-/// # Type parameters
-///
-/// Due to the limitations of macros, only a restricted subset of type parameter syntax
-/// is normally available for use in this macro. In particular, `+` cannot be used in the
-/// trait bounds. For example, `Sync + Send` won't be recognized.
-#[macro_export]
-#[allow_internal_unstable]
-macro_rules! merged_event_dispatch {
-    // TODO: Implement a () syntax around trait bounds as a workaround for macro limiations.
-    ($(
-        $(#[$meta:meta])*
-        $vis:vis struct $name:ident $(<$($ty_param:ident $(: $ty_bound:path)?),* $(,)?>)? {
-            $(
-                $(#[$field_meta:meta])* $field_vis:vis $field_name:ident: $field_type:ty
-            ),* $(,)?
-        }
-    )*) => {$(
-        $(#[$meta])*
-        $vis struct $name $(<$($ty_param $(: $ty_bound)?,)*>)? {
-            $($(#[$field_meta])* $field_vis $field_name: $field_type,)*
-        }
-        impl $(<$($ty_param $(: $ty_bound)?,)*>)?
-            $crate::RawEventDispatch for $name $(<$($ty_param)*>)?
-        {
-            merged_event_dispatch_internal!(@method, init        , $($field_name)*);
-            merged_event_dispatch_internal!(@method, check       , $($field_name)*);
-            merged_event_dispatch_internal!(@method, before_event, $($field_name)*);
-            merged_event_dispatch_internal!(@method, on_event    , $($field_name)*);
-            merged_event_dispatch_internal!(@method, after_event , $($field_name)*);
-        }
-    )*}
-}
-
 /// A [`EventDispatch`] that can be shared between threads.
 pub trait SyncEventDispatch: EventDispatch + Sync + Send + 'static { }
 impl <T: EventDispatch + Sync + Send> SyncEventDispatch for T { }

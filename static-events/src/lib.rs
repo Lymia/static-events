@@ -1,7 +1,6 @@
 #![no_std]
 #![feature(nll, specialization, allow_internal_unstable)]
 
-// TODO: Use custom derive rather than the merged_event_dispatch! macro.
 // TODO: Add a parallel set of traits for Futures
 // TODO: Implement filtering of some kind on events, and state between phases.
 
@@ -102,7 +101,7 @@
 //! assert_eq!(MyEventHandler.dispatch(MyEvent(42)), 42);
 //! ```
 //!
-//! Multiple event handlers may be merged using the [`merged_event_dispatch!`] macro:
+//! Multiple event handlers may be merged using `#[derive(RawEventDispatch)]`:
 //! ```
 //! # #![feature(specialization)]
 //! # #[macro_use] extern crate static_events;
@@ -130,11 +129,9 @@
 //!     }
 //! }
 //!
-//! merged_event_dispatch! {
-//!     #[derive(Default)]
-//!     struct SquaringEventHandler<T: RawEventDispatch> {
-//!         evh_a: MyEventHandler, evh_b: T,
-//!     }
+//! #[derive(Default, RawEventDispatch)]
+//! struct SquaringEventHandler<T: RawEventDispatch> {
+//!     evh_a: MyEventHandler, evh_b: T,
 //! }
 //!
 //! assert_eq!(SquaringEventHandler::<MyOtherEventHandler>::default().dispatch(MyEvent(9)), 81);
@@ -150,6 +147,8 @@
 
 #[allow(unused_imports)] use core::fmt::Debug;
 #[cfg(feature = "std")] extern crate std;
+
+pub use static_events_derive::*;
 
 mod events_types;
 pub use crate::events_types::*;
