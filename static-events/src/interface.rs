@@ -162,6 +162,10 @@ impl <T: RawEventDispatch> EventDispatch for T {
     }
 }
 
+/// A [`RawEventDispatch`] that can be shared between threads.
+pub trait SyncRawEventDispatch: RawEventDispatch + Sync + Send + 'static { }
+impl <T: RawEventDispatch + Sync + Send> SyncEventDispatch for T { }
+
 /// A [`EventDispatch`] that can be shared between threads.
 pub trait SyncEventDispatch: EventDispatch + Sync + Send + 'static { }
 impl <T: EventDispatch + Sync + Send> SyncEventDispatch for T { }
