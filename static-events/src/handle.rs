@@ -9,6 +9,7 @@ use crate::interface::SyncEventDispatch;
 
 #[derive(Debug)]
 enum Status<D: SyncEventDispatch> {
+    Inactive,
     Active(D),
     Shutdown,
 }
@@ -40,17 +41,28 @@ impl <D: SyncEventDispatch> Clone for DispatchHandle<D> {
     }
 }
 impl <D: SyncEventDispatch> DispatchHandle<D> {
-    pub fn new(d: D) -> DispatchHandle<D> {
+    pub fn new() -> DispatchHandle<D> {
         DispatchHandle(Arc::new(HandleData {
-            status: RwLock::new(Status::Active(d)),
+            status: RwLock::new(Status::Inactive),
             visible_refcount: AtomicUsize::new(0),
             shutdown_initialized: AtomicBool::new(false),
         }))
     }
 
-    // Gets whether this
+    // Sets the handler underlying this DispatchHandle. May only be called once.
+    pub fn activate_handle(&self, handler: D) {
+        let mut lock = self.0.status.write();
+        if let Status::Inactive = *lock {
+            *lock = Status::Active(handler);
+        } else {
+            panic!("DispatchHandle already activated.")
+        }
+    }
+
+    // Gets whether this DispatchHandle is active.
     pub fn is_shutdown(&self) -> bool {
         self.0.shutdown_initialized.load(Ordering::SeqCst) || match &*self.0.status.read() {
+            Status::Inactive => panic!("DispatchHandle not yet active."),
             Status::Active(_) => false,
             Status::Shutdown => true,
         }
@@ -118,6 +130,7 @@ impl <D: SyncEventDispatch> DispatchHandle<D> {
     #[must_use]
     pub fn try_lock<T>(&self, f: impl FnOnce(&D) -> T) -> Option<T> {
         match &*self.0.status.read() {
+            Status::Inactive => panic!("DispatchHandle not yet active."),
             Status::Active(dispatch) => {
                 let _handle = VisibleRefcountHandle::inc(&self.0.visible_refcount);
                 Some(f(dispatch))
