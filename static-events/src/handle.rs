@@ -136,7 +136,7 @@ impl <D: SyncEventDispatch> DispatchHandle<D> {
 
     /// Returns a lock to the underlying `DispatchHandle` wrapped in a [`Some`], or [`None`]
     /// if it has already been shut down.
-    pub fn try_lock(&self) -> Option<DispatchHandleLock<D>> {
+    pub fn lock(&self) -> Option<DispatchHandleLock<D>> {
         let lock = self.0.status.read();
         match &*lock {
             Status::Inactive => panic!("DispatchHandle not yet active."),
@@ -150,14 +150,5 @@ impl <D: SyncEventDispatch> DispatchHandle<D> {
             },
             Status::Shutdown => None,
         }
-    }
-
-    /// Returns a lock to the underlying `DispatchHandle`.
-    ///
-    /// # Panics
-    ///
-    /// This function panics if this `DispatchHandle` has already been shut down.
-    pub fn lock(&self) -> DispatchHandleLock<D> {
-        self.try_lock().expect("DispatchHandle has already been shut down.")
     }
 }
