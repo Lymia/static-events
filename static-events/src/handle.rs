@@ -1,11 +1,11 @@
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use core::time::Duration;
-use crate::std::sync::Arc;
-use crate::std::panic::{catch_unwind, AssertUnwindSafe};
-use crate::std::process::abort;
-use parking_lot::{RwLock, RwLockWriteGuard};
+use std::sync::Arc;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::process::abort;
+use parking_lot::{RwLock, RwLockWriteGuard, RwLockReadGuard, MappedRwLockReadGuard};
 
-use crate::interface::SyncEventDispatch;
+use crate::interface::{Event, EventDispatch, SyncEventDispatch};
 
 #[derive(Debug)]
 enum Status<D: SyncEventDispatch> {
@@ -14,22 +14,34 @@ enum Status<D: SyncEventDispatch> {
     Shutdown,
 }
 
-struct VisibleRefcountHandle<'a>(&'a AtomicUsize);
-impl <'a> VisibleRefcountHandle<'a> {
-    pub fn inc(atomic: &'a AtomicUsize) -> VisibleRefcountHandle {
+struct RefcountHandle<'a>(&'a AtomicUsize);
+impl <'a> RefcountHandle<'a> {
+    pub fn inc(atomic: &'a AtomicUsize) -> RefcountHandle {
         atomic.fetch_add(1, Ordering::Relaxed);
-        VisibleRefcountHandle(atomic)
+        RefcountHandle(atomic)
     }
 }
-impl <'a> Drop for VisibleRefcountHandle<'a> {
+impl <'a> Drop for RefcountHandle<'a> {
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
+pub struct DispatchHandleLock<'a, D: SyncEventDispatch> {
+    _refcount: RefcountHandle<'a>, lock: MappedRwLockReadGuard<'a, D>,
+}
+impl <'a, D: SyncEventDispatch> EventDispatch for DispatchHandleLock<'a, D> {
+    fn dispatch<E: Event>(&self, ev: E) -> E::RetVal {
+        self.lock.dispatch(ev)
+    }
+    fn downcast_ref<D2: 'static>(&self) -> Option<&D2> {
+        self.lock.downcast_ref()
+    }
+}
+
 #[derive(Debug)]
 struct HandleData<D: SyncEventDispatch> {
-    status: RwLock<Status<D>>, visible_refcount: AtomicUsize, shutdown_initialized: AtomicBool,
+    status: RwLock<Status<D>>, display_refcount: AtomicUsize, shutdown_initialized: AtomicBool,
 }
 
 /// A [`EventDispatch`] wrapped for use in applications that dispatch events concurrently.
@@ -44,7 +56,7 @@ impl <D: SyncEventDispatch> DispatchHandle<D> {
     pub fn new() -> DispatchHandle<D> {
         DispatchHandle(Arc::new(HandleData {
             status: RwLock::new(Status::Inactive),
-            visible_refcount: AtomicUsize::new(0),
+            display_refcount: AtomicUsize::new(0),
             shutdown_initialized: AtomicBool::new(false),
         }))
     }
@@ -70,7 +82,7 @@ impl <D: SyncEventDispatch> DispatchHandle<D> {
 
     /// Gets the number of active locks on this handle, or handles cloned from it.
     pub fn lock_count(&self) -> usize {
-        self.0.visible_refcount.load(Ordering::Relaxed)
+        self.0.display_refcount.load(Ordering::Relaxed)
     }
 
     fn initialize_shutdown(&self) {
@@ -122,30 +134,30 @@ impl <D: SyncEventDispatch> DispatchHandle<D> {
         }
     }
 
-    /// Calls the given closure with the underlying [`EventDispatch`] and returns its return
-    /// value wrapped in a [`Some`].
-    ///
-    /// If this handle has been shut down, then it instead returns [`None`] and does not call
-    /// the closure.
-    #[must_use]
-    pub fn try_lock<T>(&self, f: impl FnOnce(&D) -> T) -> Option<T> {
-        match &*self.0.status.read() {
+    /// Returns a lock to the underlying `DispatchHandle` wrapped in a [`Some`], or [`None`]
+    /// if it has already been shut down.
+    pub fn try_lock(&self) -> Option<DispatchHandleLock<D>> {
+        let lock = self.0.status.read();
+        match &*lock {
             Status::Inactive => panic!("DispatchHandle not yet active."),
-            Status::Active(dispatch) => {
-                let _handle = VisibleRefcountHandle::inc(&self.0.visible_refcount);
-                Some(f(dispatch))
+            Status::Active(_) => {
+                let lock = RwLockReadGuard::map(lock, |x| match x {
+                    Status::Active(dispatch) => dispatch,
+                    _ => unreachable!(),
+                });
+                let refcount = RefcountHandle::inc(&self.0.display_refcount);
+                Some(DispatchHandleLock { lock, _refcount: refcount })
             },
             Status::Shutdown => None,
         }
     }
 
-    /// Calls the given closure with the underlying [`EventDispatch`] and returns its return
-    /// value.
+    /// Returns a lock to the underlying `DispatchHandle`.
     ///
     /// # Panics
     ///
     /// This function panics if this `DispatchHandle` has already been shut down.
-    pub fn lock<T>(&self, f: impl FnOnce(&D) -> T) -> T {
-        self.try_lock(f).expect("DispatchHandle has already been shut down.")
+    pub fn lock(&self) -> DispatchHandleLock<D> {
+        self.try_lock().expect("DispatchHandle has already been shut down.")
     }
 }

@@ -136,11 +136,34 @@ raw_event_dispatch!(init check before_event on_event after_event);
 /// This is not meant to define be defined directly. Derived event handlers should instead be
 /// defined through the [`RootEventDispatch`] interface, and root event handlers should be
 /// defined through [`RootEventDispatch`].
-pub trait EventDispatch: Sized + Any {
+pub trait EventDispatch: Sized {
     /// Dispatches an event and returns its result.
     fn dispatch<E: Event>(&self, _: E) -> E::RetVal;
 
+    /// Returns some mutable reference to the boxed value if it is of type T, or None if it isn't.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// # #![feature(specialization)]
+    /// # #[macro_use] extern crate static_events;
+    /// # use static_events::*;
+    ///
+    /// #[derive(PartialEq, Eq, Debug)]
+    /// struct MyEventHandler(u32);
+    /// impl RootEventDispatch for MyEventHandler { }
+    ///
+    /// fn test(target: &impl EventDispatch) {
+    ///     assert_eq!(target.downcast_ref::<MyEventHandler>(), Some(&MyEventHandler(30)));
+    /// }
+    /// test(&MyEventHandler(30));
+    /// ```
     fn downcast_ref<D: 'static>(&self) -> Option<&D> {
+        None
+    }
+}
+default impl <T: EventDispatch + Any> EventDispatch for T {
+    default fn downcast_ref<D: 'static>(&self) -> Option<&D> {
         (self as &Any).downcast_ref::<D>()
     }
 }
@@ -163,9 +186,9 @@ impl <T: RawEventDispatch> EventDispatch for T {
 }
 
 /// A [`RawEventDispatch`] that can be shared between threads.
-pub trait SyncRawEventDispatch: RawEventDispatch + Sync + Send + 'static { }
+pub trait SyncRawEventDispatch: RawEventDispatch + Sync + Send { }
 impl <T: RawEventDispatch + Sync + Send> SyncEventDispatch for T { }
 
 /// A [`EventDispatch`] that can be shared between threads.
-pub trait SyncEventDispatch: EventDispatch + Sync + Send + 'static { }
+pub trait SyncEventDispatch: EventDispatch + Sync + Send { }
 impl <T: EventDispatch + Sync + Send> SyncEventDispatch for T { }
