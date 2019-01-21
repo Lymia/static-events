@@ -1,5 +1,6 @@
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use core::time::Duration;
+use std::ops::Deref;
 use std::sync::Arc;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::process::abort;
@@ -30,12 +31,16 @@ impl <'a> Drop for RefcountHandle<'a> {
 pub struct DispatchHandleLock<'a, D: SyncEventDispatch> {
     _refcount: RefcountHandle<'a>, lock: MappedRwLockReadGuard<'a, D>,
 }
+impl <'a, D: SyncEventDispatch> Deref for DispatchHandleLock<'a, D> {
+    type Target = D;
+    fn deref(&self) -> &D {
+        &self.lock
+    }
+}
+
 impl <'a, D: SyncEventDispatch> EventDispatch for DispatchHandleLock<'a, D> {
     fn dispatch<E: Event>(&self, ev: E) -> E::RetVal {
         self.lock.dispatch(ev)
-    }
-    fn downcast_ref<D2: 'static>(&self) -> Option<&D2> {
-        self.lock.downcast_ref()
     }
 }
 

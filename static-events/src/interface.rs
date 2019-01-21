@@ -1,7 +1,5 @@
 #[allow(unused_imports)] use crate::RootEventDispatch;
 
-use core::any::Any;
-
 /// The result of a stage of a event handler.
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub enum EventResult {
@@ -139,33 +137,6 @@ raw_event_dispatch!(init check before_event on_event after_event);
 pub trait EventDispatch: Sized {
     /// Dispatches an event and returns its result.
     fn dispatch<E: Event>(&self, _: E) -> E::RetVal;
-
-    /// Returns some mutable reference to the boxed value if it is of type T, or None if it isn't.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// # #![feature(specialization)]
-    /// # #[macro_use] extern crate static_events;
-    /// # use static_events::*;
-    ///
-    /// #[derive(PartialEq, Eq, Debug)]
-    /// struct MyEventHandler(u32);
-    /// impl RootEventDispatch for MyEventHandler { }
-    ///
-    /// fn test(target: &impl EventDispatch) {
-    ///     assert_eq!(target.downcast_ref::<MyEventHandler>(), Some(&MyEventHandler(30)));
-    /// }
-    /// test(&MyEventHandler(30));
-    /// ```
-    fn downcast_ref<D: 'static>(&self) -> Option<&D> {
-        None
-    }
-}
-default impl <T: EventDispatch + Any> EventDispatch for T {
-    default fn downcast_ref<D: 'static>(&self) -> Option<&D> {
-        (self as &Any).downcast_ref::<D>()
-    }
 }
 impl <T: RawEventDispatch> EventDispatch for T {
     fn dispatch<E: Event>(&self, mut ev: E) -> E::RetVal {
