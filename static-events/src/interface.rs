@@ -120,7 +120,7 @@ macro_rules! raw_event_dispatch {
         ///
         /// The methods are called in the following order:<br>
         /// `init` -> `check` -> `before_event` -> `on_event` -> `after_event`
-        pub trait RawEventDispatch: Any + Sized {
+        pub trait RawEventDispatch: Sized {
             $(
                 fn $ev<E: Event>(
                     &self, target: &impl EventDispatch, ev: &mut E, state: &mut E::State,
