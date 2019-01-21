@@ -6,6 +6,7 @@ use self::proc_macro::TokenStream;
 use proc_macro2::{TokenStream as SynTokenStream};
 use syn::*;
 use syn::export::Span;
+use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use quote::*;
 
@@ -29,9 +30,46 @@ fn create_fn_body(method_name: &Ident, fields: &Fields) -> SynTokenStream {
         },
         Fields::Unit => { }
     }
+    stream
+}
+fn i_ident(i: usize) -> Ident {
+    Ident::new(&format!("field_{}", i), Span::call_site())
+}
+fn create_enum_fn_body(
+    method_name: &Ident, variants: &Punctuated<Variant, Token![,]>
+) -> SynTokenStream {
+    let mut stream = SynTokenStream::new();
+    for variant in variants {
+        let name = &variant.ident;
+        stream.extend(match &variant.fields {
+            Fields::Named(named) => {
+                let mut matches = SynTokenStream::new();
+                let mut body = SynTokenStream::new();
+                for (i, field) in named.named.iter().enumerate() {
+                    let i = i_ident(i);
+                    let field_name = &field.ident;
+                    matches.extend(quote!(#field_name: #i,));
+                    body.extend(create_ret_callback(method_name, i));
+                }
+                quote!(Self::#name { #matches } => { #body })
+            },
+            Fields::Unnamed(unnamed) => {
+                let mut matches = SynTokenStream::new();
+                let mut body = SynTokenStream::new();
+                for (i, _) in unnamed.unnamed.iter().enumerate() {
+                    let i = i_ident(i);
+                    matches.extend(quote!(#i,));
+                    body.extend(create_ret_callback(method_name, i));
+                }
+                quote!(Self::#name(#matches) => { #body })
+            },
+            Fields::Unit => quote!(Self::#name => { }),
+        })
+    }
     quote! {
-        #stream
-        ::static_events::EvOk
+        match self {
+            #stream
+        }
     }
 }
 
@@ -47,7 +85,20 @@ fn create_fn(method_name: &Ident, body: impl ToTokens) -> SynTokenStream {
 
 fn create_struct_fn(method_name: &str, fields: &Fields) -> SynTokenStream {
     let method_name = Ident::new(method_name, Span::call_site());
-    create_fn(&method_name, create_fn_body(&method_name, fields))
+    let body = create_fn_body(&method_name, fields);
+    create_fn(&method_name, quote! {
+        #body
+        ::static_events::EvOk
+    })
+}
+
+fn create_enum_fn(method_name: &str, variants: &Punctuated<Variant, Token![,]>) -> SynTokenStream {
+    let method_name = Ident::new(method_name, Span::call_site());
+    let body = create_enum_fn_body(&method_name, variants);
+    create_fn(&method_name, quote! {
+        #body
+        ::static_events::EvOk
+    })
 }
 
 #[proc_macro_derive(RawEventDispatch)]
@@ -63,7 +114,14 @@ pub fn derive_raw_event_dispatch(input: TokenStream) -> TokenStream {
             functions.extend(create_struct_fn("after_event" , &data.fields));
             input.ident
         }
-        Data::Enum(_) => unimplemented!(),
+        Data::Enum(data) => {
+            functions.extend(create_enum_fn("init"        , &data.variants));
+            functions.extend(create_enum_fn("check"       , &data.variants));
+            functions.extend(create_enum_fn("before_event", &data.variants));
+            functions.extend(create_enum_fn("on_event"    , &data.variants));
+            functions.extend(create_enum_fn("after_event" , &data.variants));
+            input.ident
+        }
         Data::Union(_) => {
             input.span()
                 .unstable()
