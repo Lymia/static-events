@@ -1,4 +1,28 @@
-#[allow(unused_imports)] use crate::RootEventDispatch;
+mod private {
+    pub trait Sealed { }
+}
+
+/// A sealed trait that marks the phases of an event.
+pub trait EventPhase: private::Sealed { }
+macro_rules! phases {
+    ($(($name:ident, $doc:literal))*) => {$(
+        #[doc = $doc]
+        pub enum $name { }
+        impl private::Sealed for $name { }
+        impl EventPhase for $name { }
+    )*}
+}
+phases! {
+    (EvInit       , "The first phase of event execution. Intended to be used to set up an event.")
+    (EvCheck      , "The second phase of event execution. Intended to be used to check \
+                     conditions required for the execution of the event.")
+    (EvBeforeEvent, "The third phase of event execution. Intended to be used for hooks that \
+                     execute before the main actions of an event.")
+    (EvOnEvent    , "The fourth phase of event execution. Intended to be used for the main \
+                     actions of an event.")
+    (EvAfterEvent , "The fifth phase of event execution. Intended to be used for hooks that \
+                     execute after the main actions of an event.")
+}
 
 /// The result of a stage of a event handler.
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
@@ -10,6 +34,16 @@ pub enum EventResult {
     EvCancelStage,
     /// Cancels further event handlers from processing the current event.
     EvCancel,
+}
+impl Default for EventResult {
+    fn default() -> Self {
+        EvOk
+    }
+}
+impl From<()> for EventResult {
+    fn from(_: ()) -> Self {
+        EvOk
+    }
 }
 pub use self::EventResult::{EvOk, EvCancelStage, EvCancel};
 
@@ -97,37 +131,64 @@ impl <T : VoidEvent> SimpleEvent for T {
     fn starting_state(&self, _: &impl EventDispatch) {  }
 }
 
-impl Default for EventResult {
-    fn default() -> Self {
-        EvOk
+/// The generic base trait used to define [`EventDispatch`]s.
+///
+/// Each method of [`RawEventDispatch`] takes the [`EventDispatch`] the event was
+/// originally dispatched into in the `target` parameter, the event itself in the `ev`
+/// parameter, and the event's current state in the `state` parameter.
+///
+/// The methods are called in the following order:<br>
+/// `EvInit` -> `EvCheck` -> `EvBeforeEvent` -> `EvOnEvent` -> `EvAfterEvent`
+pub trait RawEventDispatch: Sized {
+    fn on_phase<E: Event, P: EventPhase, D: EventDispatch>(
+        &self, target: &D, ev: &mut E, state: &mut E::State,
+    ) -> EventResult;
+}
+
+/// A trait implements [`EventDispatch`] using [`EventHandler`]s.
+pub trait RootEventDispatch { }
+
+/// The main trait used to define [`RootEventDispatch`]s.
+///
+/// Each explicit implementation of this trait defines how one reacts to a particular
+/// type of event during a particular phase.
+pub trait EventHandler<E: Event, P: EventPhase> : RootEventDispatch {
+    fn on_phase(
+        &self, _: &impl EventDispatch, event: &mut E, _: &mut E::StateArg,
+    ) -> E::MethodRetVal;
+}
+
+trait UniversalEventHandler<E: Event, P: EventPhase> {
+    fn on_phase(
+        &self, _: &impl EventDispatch, event: &mut E, _: &mut E::StateArg,
+    ) -> E::MethodRetVal;
+}
+impl <E: Event, P: EventPhase, T> UniversalEventHandler<E, P> for T {
+    default fn on_phase(
+        &self, _: &impl EventDispatch, event: &mut E, _: &mut E::StateArg,
+    ) -> E::MethodRetVal {
+        event.default_return()
     }
 }
-impl From<()> for EventResult {
-    fn from(_: ()) -> Self {
-        EvOk
+impl <E: Event, P: EventPhase, T: EventHandler<E, P>> UniversalEventHandler<E, P> for T {
+    default fn on_phase(
+        &self, target: &impl EventDispatch, event: &mut E, state: &mut E::StateArg,
+    ) -> E::MethodRetVal {
+        EventHandler::on_phase(self, target, event, state)
     }
 }
 
-macro_rules! raw_event_dispatch {
-    ($($ev:ident)*) => {
-        /// The generic base trait used to define [`EventDispatch`]s.
-        ///
-        /// Each method of [`RawEventDispatch`] takes the [`EventDispatch`] the event was
-        /// originally dispatched into in the `target` parameter, the event itself in the `ev`
-        /// parameter, and the event's current state in the `state` parameter.
-        ///
-        /// The methods are called in the following order:<br>
-        /// `init` -> `check` -> `before_event` -> `on_event` -> `after_event`
-        pub trait RawEventDispatch: Sized {
-            $(
-                fn $ev<E: Event>(
-                    &self, target: &impl EventDispatch, ev: &mut E, state: &mut E::State,
-                ) -> EventResult;
-            )*
-        }
-    };
+impl <T: RootEventDispatch> RawEventDispatch for T {
+    default fn on_phase<E: Event, P: EventPhase, D: EventDispatch>(
+        &self, target: &D, ev: &mut E, state: &mut E::State,
+    ) -> EventResult {
+        let result = {
+            let state_arg = ev.borrow_state(state);
+            UniversalEventHandler::<E, P>::on_phase(self, target, ev, state_arg)
+        };
+        ev.to_event_result(state, result)
+    }
 }
-raw_event_dispatch!(init check before_event on_event after_event);
 
 /// A handler that receives [`Event`]s and processes them in some way.
 ///
@@ -142,16 +203,18 @@ impl <T: RawEventDispatch> EventDispatch for T {
     fn dispatch<E: Event>(&self, mut ev: E) -> E::RetVal {
         let mut state = ev.starting_state(self);
         macro_rules! do_phase {
-            ($ev:ident) => { match self.$ev(self, &mut ev, &mut state) {
-                EvOk | EvCancelStage => { }
-                EvCancel => return ev.to_return_value(self, state),
-            } }
+            ($phase:ident) => {
+                match self.on_phase::<E, $phase, Self>(self, &mut ev, &mut state) {
+                    EvOk | EvCancelStage => { }
+                    EvCancel => return ev.to_return_value(self, state),
+                }
+            }
         }
-        do_phase!(init);
-        do_phase!(check);
-        do_phase!(before_event);
-        do_phase!(on_event);
-        do_phase!(after_event);
+        do_phase!(EvInit);
+        do_phase!(EvCheck);
+        do_phase!(EvBeforeEvent);
+        do_phase!(EvOnEvent);
+        do_phase!(EvAfterEvent);
         ev.to_return_value(self, state)
     }
 }

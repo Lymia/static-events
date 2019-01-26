@@ -156,8 +156,5 @@ pub use crate::events_types::*;
 mod interface;
 pub use crate::interface::*;
 
-mod handlers;
-pub use crate::handlers::{EventHandler, IpcEventHandler, RootEventDispatch};
-
 #[cfg(feature = "std")] mod handle;
 #[cfg(feature = "std")] pub use crate::handle::*;
