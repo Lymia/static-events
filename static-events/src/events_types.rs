@@ -1,5 +1,8 @@
 // TODO: Document `[T: Bounds]` syntax.
 
+// for documentation
+#[allow(unused_imports)] use crate::*;
+
 /// A helper macro to define events that directly return their state with no further processing.
 ///
 /// The first argument is the event type, the second is the type of the event state, and the
@@ -8,12 +11,14 @@
 /// If the third argument is omitted, it is assumed to be [`Default::default`]. If the second
 /// argument is omitted, it assumed to be `()`.
 ///
+/// Event handlers for events defined using this macro should return either an [`EventResult`]
+/// or `()`.
+///
 /// # Example
 ///
 /// Declaration:
 ///
 /// ```
-/// # #[macro_use] extern crate static_events;
 /// # use static_events::*;
 /// pub struct MyEventA(u32);
 /// simple_event!(MyEventA);
@@ -27,22 +32,19 @@
 ///
 /// Usage:
 /// ```
-/// # #![feature(specialization)]
-/// # #[macro_use] extern crate static_events;
 /// # use static_events::*;
 /// # pub struct MyEventB(u32); simple_event!(MyEventB, u32);
 /// struct MyEventHandler;
-/// impl RootEventDispatch for MyEventHandler { }
-/// impl EventHandler<MyEventB> for MyEventHandler {
-///     fn on_event(&self, _: &impl EventDispatch, ev: &mut MyEventB, state: &mut u32) -> EventResult {
+/// #[event_dispatch]
+/// impl MyEventHandler {
+///     #[event_handler]
+///     fn handle_event(ev: &MyEventB, state: &mut u32) {
 ///         *state = ev.0 * ev.0;
-///         EvOk
 ///     }
 /// }
 /// assert_eq!(MyEventHandler.dispatch(MyEventB(12)), 144);
 /// ```
 #[macro_export]
-#[allow_internal_unstable]
 macro_rules! simple_event {
     ([$($bounds:tt)*] $ev:ty $(,)?) => {
         simple_event!([$($bounds)*] $ev, (), ());
@@ -51,7 +53,7 @@ macro_rules! simple_event {
         simple_event!([$($bounds)*] $ev, $state, Default::default());
     };
     ([$($bounds:tt)*] $ev:ty, $state:ty, $starting_val:expr $(,)?) => {
-        impl <$($bounds)*> $crate::SimpleEvent for $ev {
+        impl <$($bounds)*> $crate::events::SimpleEvent for $ev {
             type State = $state;
             fn starting_state(&self, _: &impl $crate::EventDispatch) -> $state {
                 $starting_val
@@ -69,8 +71,6 @@ macro_rules! simple_event {
     };
 }
 
-#[doc(hidden)] pub use core::result::{Result as __StaticEvents_Macro_Result};
-
 /// A helper macro to define events that can fail.
 ///
 /// The first argument is the event type, the second is the type of the event state, and the
@@ -79,15 +79,14 @@ macro_rules! simple_event {
 ///
 /// If the fourth argument is omitted, it is assumed to be [`Default::default`].
 ///
-/// Handlers for events defined with this macro return a `Result<EventResult, E>`, and return
-/// errors to the caller of the event, cancelling all further handlers.
+/// Handlers for events defined with this macro return a `Result<EventResult, E>` or a
+/// `Result<(), E>`, and return errors to the caller of the event, cancelling all further handlers.
 ///
 /// # Example
 ///
 /// Declaration:
 ///
 /// ```
-/// # #[macro_use] extern crate static_events;
 /// # use static_events::*; use std::io;
 /// pub struct MyEvent(u32);
 /// failable_event!(MyEvent, u32, io::Error);
@@ -96,65 +95,61 @@ macro_rules! simple_event {
 /// Usage:
 ///
 /// ```
-/// # #![feature(specialization)]
-/// # #[macro_use] extern crate static_events;
 /// # use static_events::*; use std::io;
 /// # pub struct MyEvent(u32); failable_event!(MyEvent, u32, ::std::io::Error);
 /// struct MyEventHandler;
-/// impl RootEventDispatch for MyEventHandler { }
-/// impl EventHandler<MyEvent> for MyEventHandler {
-///     fn on_event(
-///         &self, _: &impl EventDispatch, ev: &mut MyEvent, state: &mut u32,
-///     ) -> io::Result<EventResult> {
+/// #[event_dispatch]
+/// impl MyEventHandler {
+///     #[event_handler]
+///     fn handle_event(ev: &MyEvent, state: &mut u32) -> io::Result<()> {
 ///         if ev.0 > 50 { Err(io::Error::new(io::ErrorKind::Other, "too large!"))? }
 ///         *state = ev.0 * ev.0;
-///         Ok(EvOk)
+///         Ok(())
 ///     }
 /// }
 /// assert_eq!(MyEventHandler.dispatch(MyEvent(12)).ok(), Some(144));
 /// assert!(MyEventHandler.dispatch(MyEvent(100)).is_err());
 /// ```
 #[macro_export]
-#[allow_internal_unstable]
 macro_rules! failable_event {
     ([$($bounds:tt)*] $ev:ty, $state:ty, $error:ty $(,)?) => {
         failable_event!([$($bounds)*] $ev, $state, $error, Default::default());
     };
     ([$($bounds:tt)*] $ev:ty, $state:ty, $error:ty, $starting_val:expr $(,)?) => {
         impl <$($bounds)*> $crate::Event for $ev {
-            type State = $crate::__StaticEvents_Macro_Result<$state, $error>;
+            type State = $crate::private::Result<$state, $error>;
             type StateArg = $state;
-            type MethodRetVal = $crate::__StaticEvents_Macro_Result<EventResult, $error>;
-            type RetVal = $crate::__StaticEvents_Macro_Result<$state, $error>;
+            type MethodRetVal = $crate::private::FailableReturn<$error>;
+            type RetVal = $crate::private::Result<$state, $error>;
             fn starting_state(
                 &self, _: &impl $crate::EventDispatch,
-            ) -> $crate::__StaticEvents_Macro_Result<$state, $error> {
+            ) -> $crate::private::Result<$state, $error> {
                 Ok($starting_val)
             }
             fn borrow_state<'a>(
-                &self, state: &'a mut $crate::__StaticEvents_Macro_Result<$state, $error>,
+                &self, state: &'a mut $crate::private::Result<$state, $error>,
             ) -> &'a mut $state {
                 state.as_mut().expect("Continuing already failed event?")
             }
-            fn default_return(&self) -> $crate::__StaticEvents_Macro_Result<EventResult, $error> {
-                Ok(Default::default())
+            fn default_return(&self) -> $crate::private::FailableReturn<$error> {
+                Default::default()
             }
             fn to_event_result(
-                &self, state: &mut $crate::__StaticEvents_Macro_Result<$state, $error>,
-                 result: $crate::__StaticEvents_Macro_Result<EventResult, $error>,
-            ) -> EventResult {
-                match result {
+                &self, state: &mut $crate::private::Result<$state, $error>,
+                result: $crate::private::FailableReturn<$error>,
+            ) -> $crate::EventResult {
+                match result.0 {
                     Ok(result) => result,
                     Err(err) => {
                         *state = Err(err);
-                        EvCancel
+                        $crate::EvCancel
                     }
                 }
             }
             fn to_return_value(
                 &self, _: &impl $crate::EventDispatch, 
-                state: $crate::__StaticEvents_Macro_Result<$state, $error>,
-            ) -> $crate::__StaticEvents_Macro_Result<$state, $error> {
+                state: $crate::private::Result<$state, $error>,
+            ) -> $crate::private::Result<$state, $error> {
                 state
             }
         }
@@ -173,15 +168,14 @@ macro_rules! failable_event {
 /// The first argument is the event type, the second is the type of the return value. If the
 /// second argument is omitted, it is assumed to be `()`.
 ///
-/// This is meant to be used with [`IpcEventHandler`].
+/// Rather than `#[event_handler]`, event handlers for this type of event should rather be defined
+/// via `#[ipc_handler]`.
 ///
 /// # Example
 ///
 /// Declaration:
 ///
 /// ```
-/// # #![feature(specialization)]
-/// # #[macro_use] extern crate static_events;
 /// # use static_events::*;
 /// struct MyEvent(u32);
 /// ipc_event!(MyEvent, u32);
@@ -193,27 +187,25 @@ macro_rules! failable_event {
 /// Usage:
 ///
 /// ```
-/// # #![feature(specialization)]
-/// # #[macro_use] extern crate static_events;
 /// # use static_events::*;
 /// # struct MyEvent(u32); ipc_event!(MyEvent, u32);
 /// struct MyEventHandler;
-/// impl RootEventDispatch for MyEventHandler { }
-/// impl IpcEventHandler<MyEvent> for MyEventHandler {
-///     fn on_call(&self, _: &impl EventDispatch, ev: &mut MyEvent) -> u32 {
+/// #[event_dispatch]
+/// impl MyEventHandler {
+///     #[ipc_handler]
+///     fn handle_event(ev: &MyEvent) -> u32 {
 ///         ev.0 * ev.0
 ///     }
 /// }
 /// assert_eq!(MyEventHandler.dispatch(MyEvent(12)), 144);
 /// ```
 #[macro_export]
-#[allow_internal_unstable]
 macro_rules! ipc_event {
     ([$($bounds:tt)*] $ev:ty $(,)?) => {
         ipc_event!([$($bounds)*] $ev, ());
     };
     ([$($bounds:tt)*] $ev:ty, $ret_val:ty $(,)?) => {
-        impl <$($bounds)*> $crate::SimpleInterfaceEvent for $ev {
+        impl <$($bounds)*> $crate::events::SimpleInterfaceEvent for $ev {
             type State = Option<$ret_val>;
             type RetVal = $ret_val;
             fn starting_state(&self, _: &impl $crate::EventDispatch) -> Option<$ret_val> {

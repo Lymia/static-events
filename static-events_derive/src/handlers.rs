@@ -95,17 +95,26 @@ fn create_impls_for_method(
             if handler_type.set(tp, attr.span()).is_err() {
                 bad_attr = true;
             }
-            if !attr.tts.is_empty() {
-                match parse2::<TypeParen>(attr.tts.clone()) {
-                    Ok(tp) => phase = tp.elem.into_token_stream(),
-                    Err(_) => {
-                        attr.tts.span()
-                            .unstable()
-                            .error(format!("Could not parse {} attribute.", tp.name()))
-                            .emit();
-                        bad_attr = true;
-                    },
+            match tp {
+                HandlerType::Normal => if !attr.tts.is_empty() {
+                    match parse2::<TypeParen>(attr.tts.clone()) {
+                        Ok(tp) => phase = tp.elem.into_token_stream(),
+                        Err(_) => {
+                            attr.tts.span()
+                                .unstable()
+                                .error(format!("Could not parse {} attribute.", tp.name()))
+                                .emit();
+                            bad_attr = true;
+                        },
+                    }
+                },
+                HandlerType::Ipc => if !attr.tts.is_empty() {
+                    attr.tts.span()
+                        .unstable()
+                        .error(format!("{} may not be used with parameters.", tp.name()))
+                        .emit();
                 }
+                _ => unreachable!(),
             }
             attr.tts = quote! { (event_handler_ok) };
         }
@@ -255,7 +264,7 @@ fn create_impls_for_method(
         let (impl_bounds, _, where_bounds) = merged.split_for_impl();
         Ok(quote! {
             impl #impl_bounds
-                ::static_events::EventHandler<#event_ty, #phase> for #self_ty
+                ::static_events::private::EventHandler<#event_ty, #phase> for #self_ty
                 #where_bounds
             {
                 fn on_phase(
@@ -301,7 +310,22 @@ pub fn event_dispatch(attr: TokenStream, item: TokenStream) -> TokenStream {
         let (impl_bounds, _, where_bounds) = impl_block.generics.split_for_impl();
         let ty = &impl_block.self_ty;
         impls.extend(quote! {
-            impl #impl_bounds ::static_events::RootEventDispatch for #ty #where_bounds { }
+            impl #impl_bounds ::static_events::handlers::RawEventDispatch for #ty #where_bounds {
+                fn on_phase<
+                    E: ::static_events::Event,
+                    P: ::static_events::handlers::EventPhase,
+                    D: ::static_events::EventDispatch,
+                >(
+                    &self, target: &D, ev: &mut E, state: &mut E::State,
+                ) -> ::static_events::EventResult {
+                    let result = {
+                        let state_arg = ev.borrow_state(state);
+                        ::static_events::private::UniversalEventHandler::<E, P>
+                            ::on_phase(self, target, ev, state_arg)
+                    };
+                    ev.to_event_result(state, result)
+                }
+            }
         });
     }
     TokenStream::from(quote! {

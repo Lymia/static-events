@@ -8,7 +8,9 @@ use quote::*;
 
 fn create_ret_callback(field: impl ToTokens) -> SynTokenStream {
     quote! {
-        match ::static_events::RawEventDispatch::on_phase::<E, S, Self>(#field, target, ev, state) {
+        match ::static_events::handlers::RawEventDispatch::on_phase::<E, P, D>(
+            #field, target, ev, state,
+        ) {
             ::static_events::EvOk => { }
             e => return e,
         }
@@ -67,7 +69,7 @@ fn create_enum_fn_body(variants: &Punctuated<Variant, Token![,]>) -> SynTokenStr
     }
 }
 
-pub fn derive_raw_event_dispatch(input: TokenStream) -> TokenStream {
+pub fn derive_event_dispatch(input: TokenStream) -> TokenStream {
     let input: DeriveInput = parse_macro_input!(input);
     let body = match input.data {
         Data::Struct(data) => create_struct_fn_body(&data.fields),
@@ -75,7 +77,7 @@ pub fn derive_raw_event_dispatch(input: TokenStream) -> TokenStream {
         Data::Union(_) => {
             input.span()
                 .unstable()
-                .error("RawEventDispatch can only be derived from a struct or enum.")
+                .error("EventDispatch can only be derived from a struct or enum.")
                 .emit();
             return TokenStream::new()
         }
@@ -84,13 +86,15 @@ pub fn derive_raw_event_dispatch(input: TokenStream) -> TokenStream {
     let (impl_bounds, ty_param, where_bounds) = input.generics.split_for_impl();
     let name = input.ident;
     TokenStream::from(quote! {
-        impl #impl_bounds ::static_events::RawEventDispatch for #name #ty_param #where_bounds {
+        impl #impl_bounds ::static_events::handlers::RawEventDispatch
+            for #name #ty_param #where_bounds
+        {
             fn on_phase<
                 E: ::static_events::Event,
-                P: ::static_events::EventPhase,
+                P: ::static_events::handlers::EventPhase,
                 D: ::static_events::EventDispatch,
             >(
-                &self, target: &impl D, ev: &mut E, state: &mut E::State,
+                &self, target: &D, ev: &mut E, state: &mut E::State,
             ) -> ::static_events::EventResult {
                 #body
                 ::static_events::EvOk

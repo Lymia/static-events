@@ -7,9 +7,9 @@ use proc_macro::{TokenStream, TokenTree};
 mod derive;
 mod handlers;
 
-#[proc_macro_derive(RawEventDispatch)]
-pub fn derive_raw_event_dispatch(input: TokenStream) -> TokenStream {
-    derive::derive_raw_event_dispatch(input)
+#[proc_macro_derive(EventDispatch)]
+pub fn derive_event_dispatch(input: TokenStream) -> TokenStream {
+    derive::derive_event_dispatch(input)
 }
 
 #[proc_macro_attribute]

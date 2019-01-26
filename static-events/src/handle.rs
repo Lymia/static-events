@@ -1,3 +1,5 @@
+//! A handle holding a reference to an [`EventDispatch`] for use in concurrent applications.
+
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use core::time::Duration;
 use std::ops::Deref;
@@ -6,7 +8,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::process::abort;
 use parking_lot::{RwLock, RwLockWriteGuard, RwLockReadGuard, MappedRwLockReadGuard};
 
-use crate::interface::{Event, EventDispatch, SyncEventDispatch};
+use crate::handlers::SyncEventDispatch;
 
 #[derive(Debug)]
 enum Status<D: SyncEventDispatch> {
@@ -35,12 +37,6 @@ impl <'a, D: SyncEventDispatch> Deref for DispatchHandleLock<'a, D> {
     type Target = D;
     fn deref(&self) -> &D {
         &self.lock
-    }
-}
-
-impl <'a, D: SyncEventDispatch> EventDispatch for DispatchHandleLock<'a, D> {
-    fn dispatch<E: Event>(&self, ev: E) -> E::RetVal {
-        self.lock.dispatch(ev)
     }
 }
 
