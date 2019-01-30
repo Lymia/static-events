@@ -131,9 +131,6 @@ macro_rules! failable_event {
             ) -> &'a mut $state {
                 state.as_mut().expect("Continuing already failed event?")
             }
-            fn default_return(&self) -> $crate::private::FailableReturn<$error> {
-                Default::default()
-            }
             fn to_event_result(
                 &self, state: &mut $crate::private::Result<$state, $error>,
                 result: $crate::private::FailableReturn<$error>,

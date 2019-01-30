@@ -3,25 +3,28 @@
 use crate::events::*;
 use crate::handlers::*;
 
-pub trait EventHandler<E: Event, P: EventPhase> {
+pub trait EventHandler<E: Event, P: EventPhase, D> {
     fn on_phase(
         &self, _: &impl EventDispatch, event: &mut E, _: &mut E::StateArg,
     ) -> E::MethodRetVal;
 }
 
-pub trait UniversalEventHandler<E: Event, P: EventPhase> {
+pub trait UniversalEventHandler<E: Event, P: EventPhase, D> {
+    const IS_IMPLEMENTED: bool;
     fn on_phase(
         &self, _: &impl EventDispatch, event: &mut E, _: &mut E::StateArg,
     ) -> E::MethodRetVal;
 }
-impl <E: Event, P: EventPhase, T> UniversalEventHandler<E, P> for T {
+impl <E: Event, P: EventPhase, D, T> UniversalEventHandler<E, P, D> for T {
+    default const IS_IMPLEMENTED: bool = true;
     default fn on_phase(
-        &self, _: &impl EventDispatch, event: &mut E, _: &mut E::StateArg,
+        &self, _: &impl EventDispatch, _: &mut E, _: &mut E::StateArg,
     ) -> E::MethodRetVal {
-        event.default_return()
+        unreachable!()
     }
 }
-impl <E: Event, P: EventPhase, T: EventHandler<E, P>> UniversalEventHandler<E, P> for T {
+impl <E: Event, P: EventPhase, D, T: EventHandler<E, P, D>> UniversalEventHandler<E, P, D> for T {
+    default const IS_IMPLEMENTED: bool = false;
     default fn on_phase(
         &self, target: &impl EventDispatch, event: &mut E, state: &mut E::StateArg,
     ) -> E::MethodRetVal {

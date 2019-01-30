@@ -15,6 +15,8 @@ license = "MIT/Apache-2.0"
 proc-macro = true
 
 [dependencies]
-syn = { version = "0.15.18", features = ["extra-traits", "full"] }
+lazy_static = "1.2.0"
 quote = "0.6.9"
+rand = "0.6.4"
+syn = { version = "0.15.18", features = ["extra-traits", "full"] }
 proc-macro2 = { version = "0.4.20", features = ["nightly"] }

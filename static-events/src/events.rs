@@ -42,6 +42,7 @@ impl From<()> for EventResult {
         EventResult::EvOk
     }
 }
+#[allow(unused_imports)] use self::EventResult::EvOk; // for documentation
 
 /// The generic trait that defines an event.
 pub trait Event {
@@ -59,10 +60,6 @@ pub trait Event {
     type StateArg;
     /// The return value of an event handler's methods.
     ///
-    /// [`EventDispatch`]s default to calling `default_return` if no explicit handler for this
-    /// event type is defined. Note that this can happen multiple times during one event dispatch
-    /// for merged [`EventDispatch`]s.
-    ///
     /// After an event handler is called, whether default or not, `to_event_result` is called
     /// to decide how to proceed with event dispatch and update the state according to its
     /// return value.
@@ -76,8 +73,6 @@ pub trait Event {
     fn starting_state(&self, _: &impl EventDispatch) -> Self::State;
     /// Borrows the part of the state that is passed to event dispatches.
     fn borrow_state<'a>(&self, _: &'a mut Self::State) -> &'a mut Self::StateArg;
-    /// The default return value for handlers without an explicit implementation of this event.
-    fn default_return(&self) -> Self::MethodRetVal;
     /// Extracts an [`EventResult`] and updates state based on an event handler's return value.
     fn to_event_result(&self, _: &mut Self::State, _: Self::MethodRetVal) -> EventResult;
     /// Derives the output of the event dispatch from the current state.
@@ -110,9 +105,6 @@ impl <T : SimpleInterfaceEvent> Event for T {
     }
     fn borrow_state<'a>(&self, state: &'a mut T::State) -> &'a mut T::State {
         state
-    }
-    fn default_return(&self) -> EventResult {
-        EventResult::EvOk
     }
     fn to_event_result(&self, _: &mut T::State, result: EventResult) -> EventResult {
         result
