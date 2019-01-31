@@ -8,6 +8,7 @@ use syn::spanned::Spanned;
 use quote::{quote, ToTokens};
 
 // TODO: Figure out a way to handle elided lifetimes
+// TODO: Propagate docs to generated IPC proxy traits.
 
 #[derive(Debug)]
 enum HandlerArg {
@@ -540,7 +541,6 @@ struct EventDispatchAttr {
 
 static IMPL_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub fn event_dispatch(attr: TokenStream, item: TokenStream) -> TokenStream {
-    std::panic::take_hook();
     let attrs = match EventDispatchAttr::from_derive_input({
         let attr = SynTokenStream::from(attr.clone());
         &parse2::<DeriveInput>(quote!{ #[event_dispatch(#attr)] struct FakeStruct { } }).unwrap()
