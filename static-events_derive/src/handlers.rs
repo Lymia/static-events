@@ -1,4 +1,5 @@
 use core::result::Result;
+use darling::*;
 use proc_macro::TokenStream;
 use proc_macro2::{TokenStream as SynTokenStream, Span as SynSpan};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -9,13 +10,13 @@ use quote::{quote, ToTokens};
 // TODO: Figure out a way to handle elided lifetimes
 
 #[derive(Debug)]
-enum HandlerMethodArg {
+enum HandlerArg {
     SelfParam,
     ImplParam,
     Borrow(Type),
 }
-impl HandlerMethodArg {
-    fn from_param(param: &FnArg) -> Result<HandlerMethodArg, ()> {
+impl HandlerArg {
+    fn from_param(param: &FnArg) -> Result<HandlerArg, ()> {
         match param {
             FnArg::SelfValue(_) => {
                 param.span().unstable()
@@ -29,12 +30,12 @@ impl HandlerMethodArg {
                     .emit();
                 Err(())
             } else {
-                Ok(HandlerMethodArg::SelfParam)
+                Ok(HandlerArg::SelfParam)
             },
             FnArg::Ignored(ty) | FnArg::Captured(ArgCaptured { ty, .. }) => match ty {
                 Type::Reference(TypeReference { elem, .. }) => match &**elem {
-                    Type::ImplTrait(_) => Ok(HandlerMethodArg::ImplParam),
-                    elem => Ok(HandlerMethodArg::Borrow(elem.clone())),
+                    Type::ImplTrait(_) => Ok(HandlerArg::ImplParam),
+                    elem => Ok(HandlerArg::Borrow(elem.clone())),
                 },
                 _ => {
                     ty.span().unstable()
@@ -48,7 +49,7 @@ impl HandlerMethodArg {
     }
 }
 
-struct HandlerSignature {
+struct HandlerSig {
     fn_name: Ident,
     method_generics: Generics,
     self_param: Option<SynSpan>,
@@ -57,8 +58,8 @@ struct HandlerSignature {
     state_param: Option<SynSpan>,
     is_unsafe: bool,
 }
-impl HandlerSignature {
-    fn find_signature(method: &ImplItemMethod) -> Result<HandlerSignature, ()> {
+impl HandlerSig {
+    fn find_signature(method: &ImplItemMethod) -> Result<HandlerSig, ()> {
         let sig = &method.sig;
         if sig.asyncness.is_some() || sig.decl.variadic.is_some() {
             sig.span().unstable()
@@ -69,11 +70,11 @@ impl HandlerSignature {
 
         let mut parsed_params = Vec::new();
         for arg in &sig.decl.inputs {
-            parsed_params.push((HandlerMethodArg::from_param(arg)?, arg.span()));
+            parsed_params.push((HandlerArg::from_param(arg)?, arg.span()));
         }
         let mut params = parsed_params.into_iter().peekable();
 
-        let mut handler_sig = HandlerSignature {
+        let mut handler_sig = HandlerSig {
             fn_name: sig.ident.clone(),
             method_generics: sig.decl.generics.clone(),
             self_param: None,
@@ -83,13 +84,13 @@ impl HandlerSignature {
             is_unsafe: sig.unsafety.is_some(),
         };
 
-        if let Some((HandlerMethodArg::SelfParam, _)) = params.peek() {
+        if let Some((HandlerArg::SelfParam, _)) = params.peek() {
             handler_sig.self_param = Some(params.next().unwrap().1);
         }
-        if let Some((HandlerMethodArg::ImplParam, _)) = params.peek() {
+        if let Some((HandlerArg::ImplParam, _)) = params.peek() {
             handler_sig.target_param = Some(params.next().unwrap().1);
         }
-        if let Some((HandlerMethodArg::Borrow(ty), _)) = params.next() {
+        if let Some((HandlerArg::Borrow(ty), _)) = params.next() {
             handler_sig.event_ty = ty;
         } else {
             sig.span().unstable()
@@ -97,7 +98,7 @@ impl HandlerSignature {
                 .emit();
             return Err(())
         }
-        if let Some((HandlerMethodArg::Borrow(_), _)) = params.peek() {
+        if let Some((HandlerArg::Borrow(_), _)) = params.peek() {
             handler_sig.state_param = Some(params.next().unwrap().1);
         }
         if let Some((_, span)) = params.next() {
@@ -109,6 +110,143 @@ impl HandlerSignature {
 
         Ok(handler_sig)
     }
+
+    fn make_call(&self) -> SynTokenStream {
+        let name = &self.fn_name;
+        let call = match self.self_param {
+            Some(_) => quote! { self.#name },
+            None    => quote! { Self::#name },
+        };
+        let target = match self.target_param {
+            Some(_) => quote! { _target, },
+            None    => quote! {},
+        };
+        let state = match self.state_param {
+            Some(_) => quote! { _state, },
+            None    => quote! {},
+        };
+        let call = quote! { #call (#target ev, #state) };
+        if !self.is_unsafe {
+            call
+        } else {
+            quote! { unsafe { #call } }
+        }
+    }
+}
+
+fn check_type(tp: &Type, allow_nonstatic: bool) -> bool {
+    match tp {
+        Type::Reference(ref_ty) => {
+            if let Some(lifetime) = &ref_ty.lifetime {
+                let is_valid = if allow_nonstatic {
+                    lifetime.ident.to_string().as_str() != "_"
+                } else {
+                    lifetime.ident.to_string().as_str() == "static"
+                };
+                is_valid && check_type(&ref_ty.elem, allow_nonstatic)
+            } else {
+                false
+            }
+        }
+        Type::ImplTrait(_) => false,
+        Type::Slice(data) => check_type(&data.elem, allow_nonstatic),
+        Type::Array(data) => check_type(&data.elem, allow_nonstatic),
+        Type::Ptr(data) => check_type(&data.elem, allow_nonstatic),
+        Type::Paren(data) => check_type(&data.elem, allow_nonstatic),
+        Type::Group(data) => check_type(&data.elem, allow_nonstatic),
+        Type::Tuple(data) => {
+            for tp in &data.elems {
+                if !check_type(tp, allow_nonstatic) {
+                    return false
+                }
+            }
+            true
+        }
+        _ => true,
+    }
+}
+
+struct ProxySig {
+    fn_name: Ident,
+    method_generics: Generics,
+    self_param: Option<SynSpan>,
+    target_param: Option<SynSpan>,
+    types: Vec<Type>,
+    fn_return: Type,
+    unsafety: Option<Token![unsafe]>,
+}
+impl ProxySig {
+    fn find_signature(method: &ImplItemMethod) -> Result<ProxySig, ()> {
+        let sig = &method.sig;
+        if sig.asyncness.is_some() || sig.decl.variadic.is_some() {
+            sig.span().unstable()
+                .error("Event handlers cannot be async, or variadic.")
+                .emit();
+            return Err(())
+        }
+
+        let mut self_param = None;
+        let mut target_param = None;
+        let mut types = Vec::new();
+
+        let mut params = method.sig.decl.inputs.clone().into_iter().peekable();
+        match params.peek() {
+            Some(param @ FnArg::SelfValue(_)) => {
+                param.span().unstable()
+                    .error("Event handlers may not take `self` by value.")
+                    .emit();
+                return Err(())
+            },
+            Some(FnArg::SelfRef(self_ref)) => if self_ref.mutability.is_some() {
+                self_ref.span().unstable()
+                    .error("Event handlers may not take `self` by mutable reference.")
+                    .emit();
+                return Err(())
+            } else {
+                self_param = Some(params.next().unwrap().span())
+            },
+            _ => { }
+        }
+        if let Some(Ok(HandlerArg::ImplParam)) = params.peek().map(HandlerArg::from_param) {
+            target_param = Some(params.next().unwrap().span())
+        }
+        while let Some(param) = params.next() {
+            match param {
+                FnArg::Ignored(ty) | FnArg::Captured(ArgCaptured { ty, .. }) => {
+                    if !check_type(&ty, true) {
+                        ty.span().unstable()
+                            .error("IPC calls cannot currently use elided type parameters or \
+                                    impl trait.")
+                            .emit();
+                        return Err(())
+                    }
+                    types.push(ty);
+                }
+                FnArg::SelfValue(_) | FnArg::SelfRef(_) | FnArg::Inferred(_) => unimplemented!(),
+            }
+        }
+
+        let fn_return = match &sig.decl.output {
+            ReturnType::Default => parse_str::<Type>("()").unwrap(),
+            ReturnType::Type(_, ty) => *ty.clone(),
+        };
+        if !check_type(&fn_return, false) {
+            fn_return.span().unstable()
+                .error("IPC calls currently cannot return non-static types or impl trait.")
+                .emit();
+            return Err(())
+        }
+
+        Ok(ProxySig {
+            fn_name: method.sig.ident.clone(),
+            method_generics: method.sig.decl.generics.clone(),
+            self_param,
+            target_param,
+            types,
+            fn_return,
+            unsafety: method.sig.unsafety.clone(),
+        })
+    }
 }
 
 fn last_path_segment(path: &Path) -> String {
@@ -118,24 +256,25 @@ fn last_path_segment(path: &Path) -> String {
 enum HandlerType {
     Normal(SynTokenStream),
     Ipc,
+    IpcProxy,
 }
 impl HandlerType {
     fn is_attr(attr: &Attribute) -> bool {
         match last_path_segment(&attr.path).as_str() {
-            "event_handler" | "ipc_handler" => true,
+            "event_handler" | "ipc_handler" | "ipc_proxy" => true,
             _ => false,
         }
     }
 
     fn for_attr(attr: &Attribute) -> Result<Option<HandlerType>, ()> {
-        // TODO: Can we even do anything about rename imports?
-        match last_path_segment(&attr.path).as_str() {
+        let attr_name = last_path_segment(&attr.path);
+        match attr_name.as_str() {
             "event_handler" => {
                 Ok(Some(HandlerType::Normal(if !attr.tts.is_empty() {
                     match parse2::<TypeParen>(attr.tts.clone()) {
                         Ok(tp) => tp.elem.into_token_stream(),
                         Err(_) => {
-                            attr.tts.span()
+                            attr.span()
                                 .unstable()
                                 .error(format!("Could not parse #[event_handler] attribute."))
                                 .emit();
@@ -146,23 +285,20 @@ impl HandlerType {
                     quote! { ::static_events::EvOnEvent }
                 })))
             },
-            "ipc_handler" => if !attr.tts.is_empty() {
-                attr.tts.span()
+            "ipc_handler" | "ipc_proxy" => if !attr.tts.is_empty() {
+                attr.span()
                     .unstable()
-                    .error(format!("#[ipc_handler] may not be used with parameters."))
+                    .error(format!("#[{}] may not be used with parameters.", attr_name))
                     .emit();
                 Err(())
             } else {
-                Ok(Some(HandlerType::Ipc))
+                Ok(Some(match attr_name.as_str() {
+                    "ipc_handler" => HandlerType::Ipc,
+                    "ipc_proxy" => HandlerType::IpcProxy,
+                    _ => unreachable!(),
+                }))
             },
             _ => Ok(None),
-        }
-    }
-
-    fn phase(self) -> SynTokenStream {
-        match self {
-            HandlerType::Normal(toks) => toks,
-            _ => quote! { ::static_events::EvOnEvent },
         }
     }
 
@@ -170,6 +306,7 @@ impl HandlerType {
         match self {
             HandlerType::Normal(_) => "#[event_handler]",
             HandlerType::Ipc => "#[ipc_handler]",
+            HandlerType::IpcProxy => "#[ipc_proxy]",
         }
     }
 }
@@ -208,7 +345,19 @@ fn merge_generics(a: &Generics, b: &Generics) -> Generics {
     generics
 }
 
-struct MethodInfo(HandlerType, HandlerSignature);
+struct IpcProxyEntry(MethodSig, Block);
+impl IpcProxyEntry {
+    fn new(sig: MethodSig, toks: SynTokenStream) -> Self {
+        IpcProxyEntry(sig, parse2(quote! { { #toks } })
+            .expect("Internal error: Generated invalid block."))
+    }
+}
+
+enum MethodInfo {
+    Normal { phase: SynTokenStream, sig: HandlerSig },
+    Ipc { sig: HandlerSig },
+    IpcProxy { sig: ProxySig },
+}
 impl MethodInfo {
     fn for_method(method: &ImplItemMethod) -> Result<Option<MethodInfo>, ()> {
         let mut handler_type: Option<HandlerType> = None;
@@ -230,58 +379,121 @@ impl MethodInfo {
                 handler_type = Some(tp);
             }
         }
-        if let Some(tp) = handler_type {
-            let sig = HandlerSignature::find_signature(method)?;
-            if let HandlerType::Ipc = tp {
+        match handler_type {
+            Some(HandlerType::Normal(phase)) => {
+                let sig = HandlerSig::find_signature(method)?;
+                Ok(Some(MethodInfo::Normal { phase, sig }))
+            }
+            Some(HandlerType::Ipc) => {
+                let sig = HandlerSig::find_signature(method)?;
                 if let Some(span) = &sig.state_param {
                     span.unstable()
                         .error("IPC event handlers cannot have a state parameter.")
                         .emit();
                 }
+                Ok(Some(MethodInfo::Ipc { sig }))
             }
-            Ok(Some(MethodInfo(tp, sig)))
-        } else {
-            Ok(None)
+            Some(HandlerType::IpcProxy) => {
+                let sig = ProxySig::find_signature(method)?;
+                Ok(Some(MethodInfo::IpcProxy { sig }))
+            }
+            None => Ok(None),
         }
     }
 
     fn create_handler_impl(
         self, self_ty: &Type, impl_generics: &Generics, phantom: &Ident,
-    ) -> SynTokenStream {
-        let MethodInfo(handler_ty, sig) = self;
+    ) -> (SynTokenStream, Vec<IpcProxyEntry>) {
+        let (event_ty, phase, method_generics, fn_body, gen_items, proxy_entries) = match self {
+            MethodInfo::Normal { phase, sig } => {
+                let call = sig.make_call();
+                (sig.event_ty, phase, sig.method_generics,
+                 quote! { #call.into() }, SynTokenStream::new(), Vec::new())
+            }
+            MethodInfo::Ipc { sig } => {
+                let call = sig.make_call();
+                (sig.event_ty, quote! { ::static_events::EvOnEvent }, sig.method_generics, quote! {
+                    let state: &mut Option<_> = _state;
+                    assert!(state.is_none(), "Duplicate listeners responding to IPC event!");
+                    let result = #call;
+                    *state = Some(result);
+                    ::static_events::EvOk
+                }, SynTokenStream::new(), Vec::new())
+            }
+            MethodInfo::IpcProxy { sig } => {
+                let event_ident =
+                    Ident::new(&format!("{}_IpcProxyEvent", phantom), SynSpan::call_site());
 
-        let name = &sig.fn_name;
-        let call = match sig.self_param {
-            Some(_) => quote! { self.#name },
-            None    => quote! { Self::#name },
-        };
-        let target = match sig.target_param {
-            Some(_) => quote! { _target, },
-            None    => quote! {},
-        };
-        let state = match sig.state_param {
-            Some(_) => quote! { _state, },
-            None    => quote! {},
-        };
-        let call = quote! { #call (#target ev, #state) };
-        let call = if !sig.is_unsafe { call } else { quote! { unsafe { #call } } };
+                let (impl_bounds, event_tys, where_bounds) = sig.method_generics.split_for_impl();
+                let mut struct_ty_decl = SynTokenStream::new();
+                let mut fn_param_decl = SynTokenStream::new();
+                let mut param_captures = SynTokenStream::new();
+                for (i, param) in sig.types.iter().enumerate() {
+                    let param_ident = Ident::new(&format!("param_{}", i), SynSpan::call_site());
+                    struct_ty_decl.extend(quote! { #param, });
+                    fn_param_decl.extend(quote! { #param_ident: #param, });
+                    param_captures.extend(quote! { #param_ident, });
+                }
 
-        let fn_body = match &handler_ty {
-            HandlerType::Normal(_) => quote! { #call.into() },
-            HandlerType::Ipc => quote! {
-                let state: &mut Option<_> = _state;
-                assert!(state.is_none(), "Duplicate listeners responding to event!");
-                let result = #call;
-                *state = Some(result);
-                ::static_events::EvOk
-            },
+                let fn_name = sig.fn_name;
+                let fn_return = sig.fn_return;
+                let unsafety = sig.unsafety;
+                let event_def = quote! {
+                    struct #event_ident #impl_bounds (Option<(#struct_ty_decl)>) #where_bounds;
+                    impl #impl_bounds static_events::events::SimpleInterfaceEvent
+                    for #event_ident #event_tys #where_bounds {
+                        type State = Option<#fn_return>;
+                        type RetVal = #fn_return;
+                        fn starting_state(
+                            &self, _: &impl ::static_events::EventDispatch,
+                        ) -> Option<#fn_return> {
+                            None
+                        }
+                        fn to_return_value(
+                            &self,
+                            _: &impl ::static_events::EventDispatch, state: Option<#fn_return>,
+                        ) -> #fn_return {
+                            state.expect(concat!("No listeners responded to ",
+                                                 stringify!(#fn_name), "!"))
+                        }
+                    }
+                };
+                let proxy_sig = parse2::<TraitItemMethod>(quote! {
+                    #unsafety fn #fn_name #impl_bounds (
+                        &self, #fn_param_decl
+                    ) -> #fn_return #where_bounds;
+                }).unwrap();
+                let proxy_entry = IpcProxyEntry::new(proxy_sig.sig, quote! {
+                    self.dispatch(#event_ident(Some((#param_captures))))
+                });
+
+                let call = match sig.self_param {
+                    Some(_) => quote! { self.#fn_name },
+                    None    => quote! { Self::#fn_name },
+                };
+                let target = match sig.target_param {
+                    Some(_) => quote! { _target, },
+                    None    => quote! { },
+                };
+                let fn_body = quote! {
+                    if let Some((#param_captures)) = ev.0.take() {
+                        *_state = Some(#call(#target #param_captures));
+                        ::static_events::EvOk
+                    } else {
+                        panic!("Duplicate listeners responding to IPC event!")
+                    }
+                };
+                let event_ty = parse2::<Type>(quote! { #event_ident #event_tys }).unwrap();
+                (event_ty, quote! { ::static_events::EvOnEvent }, sig.method_generics,
+                 fn_body, event_def, vec![proxy_entry])
+            }
         };
 
-        let event_ty = sig.event_ty;
-        let phase = handler_ty.phase();
-        let merged = merge_generics(&sig.method_generics, impl_generics);
+        let merged = merge_generics(&method_generics, impl_generics);
         let (impl_bounds, _, where_bounds) = merged.split_for_impl();
-        quote! {
+        let impls = quote! {
+            #gen_items
+
             impl #impl_bounds
                 ::static_events::private::EventHandler<#event_ty, #phase, #phantom> for #self_ty
                 #where_bounds
@@ -293,7 +505,8 @@ impl MethodInfo {
                     #fn_body
                 }
             }
-        }
+        };
+        (impls, proxy_entries)
     }
 }
 
@@ -306,14 +519,42 @@ fn mark_attrs_processed(method: &mut ImplItemMethod) {
     }
 }
 
+struct VisibilityAttr(Visibility);
+impl Default for VisibilityAttr {
+    fn default() -> Self {
+        VisibilityAttr(Visibility::Public(VisPublic { pub_token: Default::default() }))
+    }
+}
+impl FromMeta for VisibilityAttr {
+    fn from_string(value: &str) -> darling::Result<Self> {
+        parse_str(value).map(VisibilityAttr).map_err(|_| darling::Error::unknown_value(value))
+    }
+}
+
+#[derive(Default, FromDeriveInput)]
+#[darling(default, attributes(event_dispatch))]
+struct EventDispatchAttr {
+    ipc_proxy_vis: VisibilityAttr,
+    ipc_proxy_name: Option<Ident>,
+}
+
 static IMPL_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub fn event_dispatch(attr: TokenStream, item: TokenStream) -> TokenStream {
-    if !attr.is_empty() {
-        crate::stream_span(attr)
-            .error("#[event_dispatch] cannot be used with parameters.")
-            .emit();
-        return item
-    }
+    std::panic::take_hook();
+    let attrs = match EventDispatchAttr::from_derive_input({
+        let attr = SynTokenStream::from(attr.clone());
+        &parse2::<DeriveInput>(quote!{ #[event_dispatch(#attr)] struct FakeStruct { } }).unwrap()
+    }) {
+        Ok(attrs) => attrs,
+        Err(e) if !attr.is_empty() => {
+            crate::stream_span(attr)
+                .error("Could not parse #[event_dispatch] attribute.")
+                .note(format!("{}", e))
+                .emit();
+            return item
+        }
+        _ => EventDispatchAttr::default(),
+    };
     let mut impl_block = match parse::<ItemImpl>(item.clone()) {
         Ok(block) => block,
         Err(_) => {
@@ -346,6 +587,7 @@ pub fn event_dispatch(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let impl_id = IMPL_COUNT.fetch_add(1, Ordering::Relaxed);
     let mut impls = SynTokenStream::new();
+    let mut ipc_proxies = Vec::new();
     let mut on_phase_impls = SynTokenStream::new();
     for (i, handler) in handlers.into_iter().enumerate() {
         let phantom_name =
@@ -354,12 +596,13 @@ pub fn event_dispatch(attr: TokenStream, item: TokenStream) -> TokenStream {
         let universal_handler = quote! { ::static_events::private::UniversalEventHandler };
         let universal_params = quote! { <E, P, #phantom_name> };
 
-        let handler_impl =
+        let (handler_impl, ipc_proxy) =
             handler.create_handler_impl(&impl_block.self_ty, &impl_block.generics, &phantom_name);
         impls.extend(quote! {
             enum #phantom_name { }
             #handler_impl
         });
+        ipc_proxies.extend(ipc_proxy);
         on_phase_impls.extend(quote! {
             if <Self as #universal_handler #universal_params>::IS_IMPLEMENTED {
                 let result = {
@@ -373,7 +616,7 @@ pub fn event_dispatch(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         });
     }
-    impls.extend({
+    let main_impl = {
         let (impl_bounds, _, where_bounds) = impl_block.generics.split_for_impl();
         let ty = &impl_block.self_ty;
         quote! {
@@ -390,14 +633,58 @@ pub fn event_dispatch(attr: TokenStream, item: TokenStream) -> TokenStream {
                 }
             }
         }
-    });
+    };
+
+    let (trait_decl, trait_impl) = match attrs.ipc_proxy_name {
+        Some(ident) => {
+            let mut trait_decl_body = SynTokenStream::new();
+            let mut trait_impl_body = SynTokenStream::new();
+            for IpcProxyEntry(sig, body) in ipc_proxies {
+                let trait_item_method = TraitItemMethod {
+                    attrs: Vec::new(),
+                    sig: sig.clone(),
+                    default: None,
+                    semi_token: Some(Default::default()),
+                };
+                trait_decl_body.extend(quote! { #trait_item_method });
+
+                let impl_item_method = ImplItemMethod {
+                    attrs: Vec::new(),
+                    vis: Visibility::Inherited,
+                    defaultness: None,
+                    sig,
+                    block: body,
+                };
+                trait_impl_body.extend(quote! { #impl_item_method });
+            }
+            let vis = attrs.ipc_proxy_vis.0;
+            (quote! {
+                #vis trait #ident { #trait_decl_body }
+            }, quote! {
+                impl <__EventHandlerType: ::static_events::EventDispatch> #ident
+                for __EventHandlerType {
+                    #trait_impl_body
+                }
+            })
+        }
+        None => {
+            if !ipc_proxies.is_empty() {
+                crate::smart_err_attr(
+                    attr, item,
+                    "#[ipc_proxy] requires #[event_handler(ipc_proxy_name = \"ProxyName\")].");
+            }
+            (SynTokenStream::new(), SynTokenStream::new())
+        },
+    };
 
     let impl_name = Ident::new(&format!("__ImplEventDispatch_{}", impl_id), SynSpan::call_site());
     TokenStream::from(quote! {
         #impl_block
-
+        #trait_decl
         const #impl_name: () = {
             #impls
+            #main_impl
+            #trait_impl
             ()
         };
     })

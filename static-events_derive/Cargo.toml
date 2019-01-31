@@ -15,6 +15,7 @@ license = "MIT/Apache-2.0"
 proc-macro = true
 
 [dependencies]
+darling = "0.8.3"
 lazy_static = "1.2.0"
 quote = "0.6.9"
 rand = "0.6.4"

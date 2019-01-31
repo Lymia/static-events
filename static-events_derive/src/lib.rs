@@ -1,4 +1,4 @@
-#![feature(proc_macro_diagnostic, proc_macro_span, drain_filter)]
+#![feature(proc_macro_diagnostic, proc_macro_span, drain_filter, bind_by_move_pattern_guards)]
 #![recursion_limit="128"]
 
 extern crate proc_macro;
@@ -28,7 +28,7 @@ fn stream_span(attr: TokenStream) -> Span {
     let tail_span = attr.into_iter().last().unwrap().span();
     head_span.join(tail_span).unwrap()
 }
-fn smart_err_attr(attr: TokenStream, item: TokenStream, error: String) {
+fn smart_err_attr(attr: TokenStream, item: TokenStream, error: &str) {
     stream_span(if attr.is_empty() { item } else { attr }).error(error).emit()
 }
 fn is_handler_valid(attr: TokenStream) -> bool {
@@ -42,7 +42,7 @@ fn is_handler_valid(attr: TokenStream) -> bool {
 fn warn_helper_attribute(name: &str, attr: TokenStream, item: TokenStream) {
     if !is_handler_valid(attr.clone()) {
         smart_err_attr(attr, item,
-                       format!("{} can only be used inside #[event_dispatch] blocks.", name))
+                       &format!("{} can only be used inside #[event_dispatch] blocks.", name))
 
     }
 }
@@ -56,5 +56,11 @@ pub fn event_handler(attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn ipc_handler(attr: TokenStream, item: TokenStream) -> TokenStream {
     warn_helper_attribute("#[ipc_handler]", attr, item.clone());
+    item
+}
+
+#[proc_macro_attribute]
+pub fn ipc_proxy(attr: TokenStream, item: TokenStream) -> TokenStream {
+    warn_helper_attribute("#[ipc_proxy]", attr, item.clone());
     item
 }
