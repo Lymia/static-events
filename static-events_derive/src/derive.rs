@@ -8,11 +8,14 @@ use quote::*;
 
 fn create_ret_callback(field: impl ToTokens) -> SynTokenStream {
     quote! {
-        match ::static_events::handlers::RawEventDispatch::on_phase::<E, P, D>(
-            #field, target, ev, state,
-        ) {
-            ::static_events::EvOk => { }
-            e => return e,
+        {
+            let dispatch_result =
+                ::static_events::handlers::RawEventDispatch::on_phase
+                ::<__EventType, __EventPhase, __EventDispatch>(#field, target, ev, state);
+            match dispatch_result {
+                ::static_events::EvOk => { }
+                e => return e,
+            }
         }
     }
 }
@@ -90,11 +93,11 @@ pub fn derive_event_dispatch(input: TokenStream) -> TokenStream {
             for #name #ty_param #where_bounds
         {
             fn on_phase<
-                E: ::static_events::Event,
-                P: ::static_events::handlers::EventPhase,
-                D: ::static_events::EventDispatch,
+                __EventType: ::static_events::Event,
+                __EventPhase: ::static_events::handlers::EventPhase,
+                __EventDispatch: ::static_events::EventDispatch,
             >(
-                &self, target: &D, ev: &mut E, state: &mut E::State,
+                &self, target: &__EventDispatch, ev: &mut __EventType, state: &mut E::State,
             ) -> ::static_events::EventResult {
                 #body
                 ::static_events::EvOk

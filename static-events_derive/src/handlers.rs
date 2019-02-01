@@ -594,7 +594,7 @@ pub fn event_dispatch(attr: TokenStream, item: TokenStream) -> TokenStream {
             Ident::new(&format!("__ImplEventDispatch_Phantom_{}_{}", impl_id, i),
                        SynSpan::call_site());
         let universal_handler = quote! { ::static_events::private::UniversalEventHandler };
-        let universal_params = quote! { <E, P, #phantom_name> };
+        let universal_params = quote! { <__EventType, __EventPhase, #phantom_name> };
 
         let (handler_impl, ipc_proxy) =
             handler.create_handler_impl(&impl_block.self_ty, &impl_block.generics, &phantom_name);
@@ -622,11 +622,12 @@ pub fn event_dispatch(attr: TokenStream, item: TokenStream) -> TokenStream {
         quote! {
             impl #impl_bounds ::static_events::handlers::RawEventDispatch for #ty #where_bounds {
                 fn on_phase<
-                    E: ::static_events::Event,
-                    P: ::static_events::handlers::EventPhase,
-                    D: ::static_events::EventDispatch,
+                    __EventType: ::static_events::Event,
+                    __EventPhase: ::static_events::handlers::EventPhase,
+                    __EventDispatch: ::static_events::EventDispatch,
                 >(
-                    &self, target: &D, ev: &mut E, state: &mut E::State,
+                    &self, target: &__EventDispatch,
+                    ev: &mut __EventType, state: &mut __EventType::State,
                 ) -> ::static_events::EventResult {
                     #on_phase_impls
                     ::static_events::EvOk
