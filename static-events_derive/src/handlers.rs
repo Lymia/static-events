@@ -535,6 +535,7 @@ impl FromMeta for VisibilityAttr {
 #[derive(Default, FromDeriveInput)]
 #[darling(default, attributes(event_dispatch))]
 struct EventDispatchAttr {
+    export_service: bool,
     ipc_proxy_vis: VisibilityAttr,
     ipc_proxy_name: Option<Ident>,
 }
@@ -617,6 +618,14 @@ pub fn event_dispatch(attr: TokenStream, item: TokenStream) -> TokenStream {
         });
     }
     let main_impl = {
+        let get_service_body = if attrs.export_service {
+            quote! {
+                ::static_events::private::CheckDowncast::<__DowncastTarget>::downcast_ref(self)
+            }
+        } else {
+            quote! { None }
+        };
+
         let (impl_bounds, _, where_bounds) = impl_block.generics.split_for_impl();
         let ty = &impl_block.self_ty;
         quote! {
@@ -631,6 +640,10 @@ pub fn event_dispatch(attr: TokenStream, item: TokenStream) -> TokenStream {
                 ) -> ::static_events::EventResult {
                     #on_phase_impls
                     ::static_events::EvOk
+                }
+
+                fn get_service<__DowncastTarget>(&self) -> Option<&__DowncastTarget> {
+                    #get_service_body
                 }
             }
         }

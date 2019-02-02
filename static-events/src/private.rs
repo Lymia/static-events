@@ -32,6 +32,20 @@ impl <E: Event, P: EventPhase, D, T: EventHandler<E, P, D>> UniversalEventHandle
     }
 }
 
+pub trait CheckDowncast<A> {
+    fn downcast_ref(&self) -> Option<&A>;
+}
+impl <A> CheckDowncast<A> for A {
+    default fn downcast_ref(&self) -> Option<&A> {
+        Some(unsafe { &*(self as *const Self as *const A) })
+    }
+}
+impl <A, B> CheckDowncast<B> for A {
+    default fn downcast_ref(&self) -> Option<&B> {
+        None
+    }
+}
+
 #[doc(hidden)] pub use core::result::Result;
 
 pub struct FailableReturn<E>(pub Result<EventResult, E>);

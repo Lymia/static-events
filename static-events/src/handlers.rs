@@ -41,9 +41,13 @@ phases! {
 /// events system. Most users should rely on `#[derive(RawEventDispatch)]` and `#[event_dispatch]`
 /// instead.
 pub trait RawEventDispatch: Sized + 'static {
+    /// Runs a phase of this event.
     fn on_phase<E: Event, P: EventPhase, D: EventDispatch>(
         &self, target: &D, ev: &mut E, state: &mut E::State,
     ) -> EventResult;
+
+    /// Gets a service from this event dispatch.
+    fn get_service<S>(&self) -> Option<&S>;
 }
 
 /// A handler that receives [`Event`]s and processes them in some way.
@@ -52,6 +56,12 @@ pub trait RawEventDispatch: Sized + 'static {
 pub trait EventDispatch: Sized + 'static {
     /// Dispatches an event and returns its result.
     fn dispatch<E: Event>(&self, _: E) -> E::RetVal;
+
+    /// Gets a service from this event dispatch.
+    fn get_service<S>(&self) -> Option<&S>;
+
+    /// Downcasts this event handler
+    fn downcast_ref<T>(&self) -> Option<&T>;
 }
 impl <T: RawEventDispatch> EventDispatch for T {
     fn dispatch<E: Event>(&self, mut ev: E) -> E::RetVal {
@@ -70,6 +80,14 @@ impl <T: RawEventDispatch> EventDispatch for T {
         do_phase!(EvOnEvent);
         do_phase!(EvAfterEvent);
         ev.to_return_value(self, state)
+    }
+
+    fn get_service<S>(&self) -> Option<&S> {
+        self.get_service()
+    }
+
+    fn downcast_ref<U>(&self) -> Option<&U> {
+        crate::private::CheckDowncast::<U>::downcast_ref(self)
     }
 }
 
