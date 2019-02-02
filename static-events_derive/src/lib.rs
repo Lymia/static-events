@@ -52,15 +52,3 @@ pub fn event_handler(attr: TokenStream, item: TokenStream) -> TokenStream {
     warn_helper_attribute("#[event_handler]", attr, item.clone());
     item
 }
-
-#[proc_macro_attribute]
-pub fn ipc_handler(attr: TokenStream, item: TokenStream) -> TokenStream {
-    warn_helper_attribute("#[ipc_handler]", attr, item.clone());
-    item
-}
-
-#[proc_macro_attribute]
-pub fn ipc_proxy(attr: TokenStream, item: TokenStream) -> TokenStream {
-    warn_helper_attribute("#[ipc_proxy]", attr, item.clone());
-    item
-}

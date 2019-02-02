@@ -16,8 +16,6 @@
 //! * [`simple_event!`] for events that directly return their state to the caller, or do not
 //!   use state at all.
 //! * [`failable_event!`] for events that can fail and return [`Result`]s.
-//! * [`ipc_event!`] for events that should only have one listener processing it.
-//!   [`IpcEventHandler`] should be used instead of [`EventHandler`] for events of this type.
 
 use crate::handlers::*;
 

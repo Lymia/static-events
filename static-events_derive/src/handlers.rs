@@ -140,12 +140,11 @@ fn last_path_segment(path: &Path) -> String {
 
 enum HandlerType {
     Normal(SynTokenStream),
-    Ipc,
 }
 impl HandlerType {
     fn is_attr(attr: &Attribute) -> bool {
         match last_path_segment(&attr.path).as_str() {
-            "event_handler" | "ipc_handler" => true,
+            "event_handler" => true,
             _ => false,
         }
     }
@@ -168,15 +167,6 @@ impl HandlerType {
                     quote! { ::static_events::EvOnEvent }
                 })))
             },
-            "ipc_handler" => if !attr.tts.is_empty() {
-                attr.span()
-                    .unstable()
-                    .error(format!("#[ipc_handler] may not be used with parameters."))
-                    .emit();
-                Err(())
-            } else {
-                Ok(Some(HandlerType::Ipc))
-            },
             _ => Ok(None),
         }
     }
@@ -184,7 +174,6 @@ impl HandlerType {
     fn name(&self) -> &'static str {
         match self {
             HandlerType::Normal(_) => "#[event_handler]",
-            HandlerType::Ipc => "#[ipc_handler]",
         }
     }
 }
@@ -225,7 +214,6 @@ fn merge_generics(a: &Generics, b: &Generics) -> Generics {
 
 enum MethodInfo {
     Normal { phase: SynTokenStream, sig: HandlerSig },
-    Ipc { sig: HandlerSig },
 }
 impl MethodInfo {
     fn for_method(method: &ImplItemMethod) -> Result<Option<MethodInfo>, ()> {
@@ -253,15 +241,6 @@ impl MethodInfo {
                 let sig = HandlerSig::find_signature(method)?;
                 Ok(Some(MethodInfo::Normal { phase, sig }))
             }
-            Some(HandlerType::Ipc) => {
-                let sig = HandlerSig::find_signature(method)?;
-                if let Some(span) = &sig.state_param {
-                    span.unstable()
-                        .error("IPC event handlers cannot have a state parameter.")
-                        .emit();
-                }
-                Ok(Some(MethodInfo::Ipc { sig }))
-            }
             None => Ok(None),
         }
     }
@@ -273,16 +252,6 @@ impl MethodInfo {
             MethodInfo::Normal { phase, sig } => {
                 let call = sig.make_call();
                 (sig.event_ty, phase, sig.method_generics, quote! { #call.into() })
-            }
-            MethodInfo::Ipc { sig } => {
-                let call = sig.make_call();
-                (sig.event_ty, quote! { ::static_events::EvOnEvent }, sig.method_generics, quote! {
-                    let state: &mut Option<_> = _state;
-                    assert!(state.is_none(), "Duplicate listeners responding to IPC event!");
-                    let result = #call;
-                    *state = Some(result);
-                    ::static_events::EvOk
-                })
             }
         };
 
