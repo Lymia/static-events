@@ -16,7 +16,7 @@ pub trait UniversalEventHandler<E: Event, P: EventPhase, D> {
     ) -> E::MethodRetVal;
 }
 impl <E: Event, P: EventPhase, D, T> UniversalEventHandler<E, P, D> for T {
-    default const IS_IMPLEMENTED: bool = true;
+    default const IS_IMPLEMENTED: bool = false;
     default fn on_phase(
         &self, _: &impl EventDispatch, _: &mut E, _: &mut E::StateArg,
     ) -> E::MethodRetVal {
@@ -24,7 +24,7 @@ impl <E: Event, P: EventPhase, D, T> UniversalEventHandler<E, P, D> for T {
     }
 }
 impl <E: Event, P: EventPhase, D, T: EventHandler<E, P, D>> UniversalEventHandler<E, P, D> for T {
-    default const IS_IMPLEMENTED: bool = false;
+    default const IS_IMPLEMENTED: bool = true;
     default fn on_phase(
         &self, target: &impl EventDispatch, event: &mut E, state: &mut E::StateArg,
     ) -> E::MethodRetVal {

@@ -40,7 +40,7 @@ phases! {
 /// This trait should only be implemented directly for advanced manipulations of the
 /// events system. Most users should rely on `#[derive(RawEventDispatch)]` and `#[event_dispatch]`
 /// instead.
-pub trait RawEventDispatch: Sized {
+pub trait RawEventDispatch: Sized + 'static {
     fn on_phase<E: Event, P: EventPhase, D: EventDispatch>(
         &self, target: &D, ev: &mut E, state: &mut E::State,
     ) -> EventResult;
@@ -49,7 +49,7 @@ pub trait RawEventDispatch: Sized {
 /// A handler that receives [`Event`]s and processes them in some way.
 ///
 /// This is not meant to define be defined directly. See [`RawEventDispatch`] instead.
-pub trait EventDispatch: Sized {
+pub trait EventDispatch: Sized + 'static {
     /// Dispatches an event and returns its result.
     fn dispatch<E: Event>(&self, _: E) -> E::RetVal;
 }

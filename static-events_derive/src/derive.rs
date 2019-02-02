@@ -97,7 +97,8 @@ pub fn derive_event_dispatch(input: TokenStream) -> TokenStream {
                 __EventPhase: ::static_events::handlers::EventPhase,
                 __EventDispatch: ::static_events::EventDispatch,
             >(
-                &self, target: &__EventDispatch, ev: &mut __EventType, state: &mut E::State,
+                &self,
+                target: &__EventDispatch, ev: &mut __EventType, state: &mut __EventType::State,
             ) -> ::static_events::EventResult {
                 #body
                 ::static_events::EvOk
