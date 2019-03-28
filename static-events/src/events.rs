@@ -43,7 +43,7 @@ impl From<()> for EventResult {
 #[allow(unused_imports)] use self::EventResult::EvOk; // for documentation
 
 /// The generic trait that defines an event.
-pub trait Event {
+pub trait Event: Sized {
     /// The type of state stored on the stack during event dispatch.
     ///
     /// A value of this type is constructed at the start of event dispatch by calling the
@@ -54,7 +54,7 @@ pub trait Event {
     ///
     /// This is derived from `State` by calling the `borrow_state` method.
     ///
-    /// Note that the full `State` value is still exposed to [`RawEventDispatch`].
+    /// Note that the full `State` value is still exposed to [`Events`].
     type StateArg;
     /// The return value of an event handler's methods.
     ///
@@ -68,17 +68,17 @@ pub trait Event {
     type RetVal;
 
     /// Constructs the state maintained during an event dispatch.
-    fn starting_state(&self, _: &impl EventDispatch) -> Self::State;
+    fn starting_state(&self, _: &Handler<impl Events>) -> Self::State;
     /// Borrows the part of the state that is passed to event dispatches.
     fn borrow_state<'a>(&self, _: &'a mut Self::State) -> &'a mut Self::StateArg;
     /// Extracts an [`EventResult`] and updates state based on an event handler's return value.
     fn to_event_result(&self, _: &mut Self::State, _: Self::MethodRetVal) -> EventResult;
     /// Derives the output of the event dispatch from the current state.
-    fn to_return_value(&self, _: &impl EventDispatch, _: Self::State) -> Self::RetVal;
+    fn to_return_value(&self, _: &Handler<impl Events>, _: Self::State) -> Self::RetVal;
 }
 
 /// An [`Event`] that does not use the `MethodRetVal` or `StateArg` mechanisms.
-pub trait SimpleInterfaceEvent {
+pub trait SimpleInterfaceEvent: Sized {
     /// The type of state stored on the stack during event dispatch, and passed to event handlers.
     ///
     /// A value of this type is constructed at the start of event dispatch by calling the
@@ -88,9 +88,9 @@ pub trait SimpleInterfaceEvent {
     type RetVal;
 
     /// Constructs the state maintained during an event dispatch.
-    fn starting_state(&self, _: &impl EventDispatch) -> Self::State;
+    fn starting_state(&self, _: &Handler<impl Events>) -> Self::State;
     /// Derives the output of the event dispatch from the current state.
-    fn to_return_value(&self, _: &impl EventDispatch, _: Self::State) -> Self::RetVal;
+    fn to_return_value(&self, _: &Handler<impl Events>, _: Self::State) -> Self::RetVal;
 }
 impl <T : SimpleInterfaceEvent> Event for T {
     type State = T::State;
@@ -98,7 +98,7 @@ impl <T : SimpleInterfaceEvent> Event for T {
     type MethodRetVal = EventResult;
     type RetVal = T::RetVal;
 
-    fn starting_state(&self, target: &impl EventDispatch) -> T::State {
+    fn starting_state(&self, target: &Handler<impl Events>) -> T::State {
         SimpleInterfaceEvent::starting_state(self, target)
     }
     fn borrow_state<'a>(&self, state: &'a mut T::State) -> &'a mut T::State {
@@ -107,36 +107,36 @@ impl <T : SimpleInterfaceEvent> Event for T {
     fn to_event_result(&self, _: &mut T::State, result: EventResult) -> EventResult {
         result
     }
-    fn to_return_value(&self, target: &impl EventDispatch, state: T::State) -> T::RetVal {
+    fn to_return_value(&self, target: &Handler<impl Events>, state: T::State) -> T::RetVal {
         SimpleInterfaceEvent::to_return_value(self, target, state)
     }
 }
 
 /// An [`Event`] that returns `State` directly when called.
-pub trait SimpleEvent {
+pub trait SimpleEvent: Sized {
     /// The type of the state maintained between event handler calls and returned from this event.
     ///
     /// A value of this type is constructed at the start of event dispatch by calling the
     /// `starting_state` method.
     type State;
     /// Constructs the state maintained during an event dispatch.
-    fn starting_state(&self, _: &impl EventDispatch) -> Self::State;
+    fn starting_state(&self, _: &Handler<impl Events>) -> Self::State;
 }
 impl <T : SimpleEvent> SimpleInterfaceEvent for T {
     type State = T::State;
     type RetVal = T::State;
 
-    fn starting_state(&self, target: &impl EventDispatch) -> T::State {
+    fn starting_state(&self, target: &Handler<impl Events>) -> T::State {
         SimpleEvent::starting_state(self, target)
     }
-    fn to_return_value(&self, _: &impl EventDispatch, state: T::State) -> T::State {
+    fn to_return_value(&self, _: &Handler<impl Events>, state: T::State) -> T::State {
         state
     }
 }
 
 /// An [`Event`] that returns no value and stores no state.
-pub trait VoidEvent { }
+pub trait VoidEvent: Sized { }
 impl <T : VoidEvent> SimpleEvent for T {
     type State = ();
-    fn starting_state(&self, _: &impl EventDispatch) {  }
+    fn starting_state(&self, _: &Handler<impl Events>) {  }
 }

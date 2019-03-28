@@ -2,33 +2,84 @@
 
 use crate::events::*;
 use crate::handlers::*;
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Poll, Waker};
 
-pub trait EventHandler<E: Event, P: EventPhase, D> {
-    fn on_phase(
-        &self, _: &impl EventDispatch, event: &mut E, _: &mut E::StateArg,
-    ) -> E::MethodRetVal;
-}
-
-pub trait UniversalEventHandler<E: Event, P: EventPhase, D> {
-    const IS_IMPLEMENTED: bool;
-    fn on_phase(
-        &self, _: &impl EventDispatch, event: &mut E, _: &mut E::StateArg,
-    ) -> E::MethodRetVal;
-}
-impl <E: Event, P: EventPhase, D, T> UniversalEventHandler<E, P, D> for T {
-    default const IS_IMPLEMENTED: bool = false;
-    default fn on_phase(
-        &self, _: &impl EventDispatch, _: &mut E, _: &mut E::StateArg,
-    ) -> E::MethodRetVal {
+enum NullFuture { }
+impl Future for NullFuture {
+    type Output = EventResult;
+    fn poll(self: Pin<&mut Self>, _: &Waker) -> Poll<Self::Output> {
         unreachable!()
     }
 }
-impl <E: Event, P: EventPhase, D, T: EventHandler<E, P, D>> UniversalEventHandler<E, P, D> for T {
-    default const IS_IMPLEMENTED: bool = true;
+
+trait UniversalEventHandler<E: Events, Ev: Event, P: EventPhase, D = DefaultHandler>: Events {
+    const IS_IMPLEMENTED: bool;
+
+    fn on_phase(
+        &self, target: &Handler<E>, ev: &mut Ev, state: &mut Ev::State,
+    ) -> EventResult;
+
+    type FutureType: Future<Output = EventResult>;
+    unsafe fn on_phase_async(ctx: AsyncDispatchContext<Self, E, Ev>) -> Self::FutureType;
+}
+impl <E: Events, Ev: Event, P: EventPhase, D, T: Events> UniversalEventHandler<E, Ev, P, D>
+    for T
+{
+    default const IS_IMPLEMENTED: bool = false;
+
     default fn on_phase(
-        &self, target: &impl EventDispatch, event: &mut E, state: &mut E::StateArg,
-    ) -> E::MethodRetVal {
-        EventHandler::on_phase(self, target, event, state)
+        &self, _: &Handler<E>, _: &mut Ev, _: &mut Ev::State,
+    ) -> EventResult {
+        unreachable!()
+    }
+
+    default type FutureType = NullFuture;
+    default unsafe fn on_phase_async(_: AsyncDispatchContext<Self, E, Ev>) -> Self::FutureType {
+        unreachable!()
+    }
+}
+impl <
+    E: Events, Ev: Event, P: EventPhase, D, T: Events + EventHandler<E, Ev, P, D>,
+> UniversalEventHandler<E, Ev, P, D> for T {
+    const IS_IMPLEMENTED: bool = true;
+
+    fn on_phase(
+        &self, target: &Handler<E>, ev: &mut Ev, state: &mut Ev::State,
+    ) -> EventResult {
+        self.on_phase(target, ev, state)
+    }
+
+    type FutureType = <Self as EventHandler<E, Ev, P, D>>::FutureType;
+    unsafe fn on_phase_async(ctx: AsyncDispatchContext<Self, E, Ev>) -> Self::FutureType {
+        <Self as EventHandler<E, Ev, P, D>>::on_phase_async(ctx)
+    }
+}
+
+pub const fn is_implemented<T: Events, E: Events, Ev: Event, P: EventPhase, D>() -> bool {
+    <T as UniversalEventHandler<E, Ev, P, D>>::IS_IMPLEMENTED
+}
+pub fn on_phase<T: Events, E: Events, Ev: Event, P: EventPhase, D>(
+    this: &T, target: &Handler<E>, ev: &mut Ev, state: &mut Ev::State,
+) -> EventResult {
+    if is_implemented::<T, E, Ev, P, D>() {
+        UniversalEventHandler::<E, Ev, P, D>::on_phase(this, target, ev, state)
+    } else {
+        EvOk
+    }
+}
+pub async fn on_phase_async<'a, T: Events, E: Events, Ev: Event, P: EventPhase, D>(
+    this: &'a T, target: &'a Handler<E>, ev: &'a mut Ev, state: &'a mut Ev::State,
+) -> EventResult {
+    if is_implemented::<T, E, Ev, P, D>() {
+        let async_data = AsyncDispatchContext { this, target, ev, state };
+        let future = unsafe {
+            <T as UniversalEventHandler<E, Ev, P, D>>::on_phase_async(async_data)
+        };
+        await!(future)
+    } else {
+        EvOk
     }
 }
 
@@ -46,7 +97,8 @@ impl <A, B> CheckDowncast<B> for A {
     }
 }
 
-#[doc(hidden)] pub use core::result::Result;
+#[doc(hidden)] pub use std::result::Result;
+use crate::events::EventResult::EvOk;
 
 pub struct FailableReturn<E>(pub Result<EventResult, E>);
 impl <E> Default for FailableReturn<E> {

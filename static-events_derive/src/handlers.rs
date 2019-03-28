@@ -1,8 +1,7 @@
-use core::result::Result;
 use darling::*;
 use proc_macro::TokenStream;
 use proc_macro2::{TokenStream as SynTokenStream, Span as SynSpan};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::result::Result;
 use syn::*;
 use syn::spanned::Spanned;
 use quote::{quote, ToTokens};
@@ -178,40 +177,6 @@ impl HandlerType {
     }
 }
 
-fn merge_generics(a: &Generics, b: &Generics) -> Generics {
-    let mut toks = SynTokenStream::new();
-    for lifetime in a.lifetimes() {
-        toks.extend(quote! { #lifetime, })
-    }
-    for lifetime in b.lifetimes() {
-        toks.extend(quote! { #lifetime, })
-    }
-    for bound in a.type_params() {
-        toks.extend(quote! { #bound, })
-    }
-    for bound in b.type_params() {
-        toks.extend(quote! { #bound, })
-    }
-    for const_bound in a.const_params() {
-        toks.extend(quote! { #const_bound, })
-    }
-    for const_bound in a.const_params() {
-        toks.extend(quote! { #const_bound, })
-    }
-
-    let mut generics = parse2::<Generics>(quote! { < #toks > }).unwrap();
-    let mut toks = SynTokenStream::new();
-    toks.extend(quote! { where });
-    for where_element in &a.clone().make_where_clause().predicates {
-        toks.extend(quote! { #where_element, })
-    }
-    for where_element in &b.clone().make_where_clause().predicates {
-        toks.extend(quote! { #where_element, })
-    }
-    generics.where_clause = Some(parse2(toks).unwrap());
-    generics
-}
-
 enum MethodInfo {
     Normal { phase: SynTokenStream, sig: HandlerSig },
 }
@@ -255,7 +220,7 @@ impl MethodInfo {
             }
         };
 
-        let merged = merge_generics(&method_generics, impl_generics);
+        let merged = crate::merge_generics(&method_generics, impl_generics);
         let (impl_bounds, _, where_bounds) = merged.split_for_impl();
         quote! {
             impl #impl_bounds
@@ -300,7 +265,6 @@ struct EventDispatchAttr {
     export_service: bool,
 }
 
-static IMPL_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub fn event_dispatch(attr: TokenStream, item: TokenStream) -> TokenStream {
     let attrs = match EventDispatchAttr::from_derive_input({
         let attr = SynTokenStream::from(attr.clone());
@@ -346,7 +310,7 @@ pub fn event_dispatch(attr: TokenStream, item: TokenStream) -> TokenStream {
         return TokenStream::from(quote! { #impl_block })
     }
 
-    let impl_id = IMPL_COUNT.fetch_add(1, Ordering::Relaxed);
+    let impl_id = crate::impl_id();
     let mut impls = SynTokenStream::new();
     let mut on_phase_impls = SynTokenStream::new();
     for (i, handler) in handlers.into_iter().enumerate() {

@@ -1,9 +1,9 @@
 //! A handle holding a reference to an [`EventDispatch`] for use in concurrent applications.
 
-use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use core::time::Duration;
 use std::ops::Deref;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::process::abort;
 use parking_lot::{RwLock, RwLockWriteGuard, RwLockReadGuard, MappedRwLockReadGuard};

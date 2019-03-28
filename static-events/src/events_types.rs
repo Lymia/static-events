@@ -55,7 +55,7 @@ macro_rules! simple_event {
     ([$($bounds:tt)*] $ev:ty, $state:ty, $starting_val:expr $(,)?) => {
         impl <$($bounds)*> $crate::events::SimpleEvent for $ev {
             type State = $state;
-            fn starting_state(&self, _: &impl $crate::EventDispatch) -> $state {
+            fn starting_state(&self, _: &$crate::Handler<impl $crate::Events>) -> $state {
                 $starting_val
             }
         }
@@ -122,7 +122,7 @@ macro_rules! failable_event {
             type MethodRetVal = $crate::private::FailableReturn<$error>;
             type RetVal = $crate::private::Result<$state, $error>;
             fn starting_state(
-                &self, _: &impl $crate::EventDispatch,
+                &self, _: &$crate::Handler<impl $crate::Events>,
             ) -> $crate::private::Result<$state, $error> {
                 Ok($starting_val)
             }
@@ -144,7 +144,7 @@ macro_rules! failable_event {
                 }
             }
             fn to_return_value(
-                &self, _: &impl $crate::EventDispatch, 
+                &self, _: &$crate::Handler<impl $crate::Events>,
                 state: $crate::private::Result<$state, $error>,
             ) -> $crate::private::Result<$state, $error> {
                 state

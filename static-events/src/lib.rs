@@ -1,7 +1,5 @@
-#![no_std]
-#![feature(nll, specialization)]
+#![feature(const_fn, nll, specialization, futures_api, async_await, await_macro)]
 
-// TODO: Add a parallel set of traits for Futures
 // TODO: Implement filtering of some kind on events, and state between phases.
 
 //! A generic zero-cost event handler system. Event dispatches should get compiled down to a
@@ -121,8 +119,7 @@
 //! As all event handlers are passed around using immutable pointers, locking or cells must be
 //! used to store state in handlers.
 
-#[allow(unused_imports)] use core::fmt::Debug;
-#[cfg(feature = "std")] extern crate std;
+#[allow(unused_imports)] use std::fmt::Debug;
 
 pub use static_events_derive::*;
 
@@ -134,11 +131,11 @@ pub mod handlers;
 
 pub use crate::events::{Event, EventResult};
 pub use crate::events::EventResult::*;
-pub use crate::handlers::{EventDispatch, SyncEventDispatch};
+pub use crate::handlers::{Events, Handler};
 pub use crate::handlers::{EvInit, EvCheck, EvBeforeEvent, EvOnEvent, EvAfterEvent};
 
 #[doc(hidden)]
 /// This module is used by static-events_derive, and is not stable API.
 pub mod private;
 
-#[cfg(feature = "std")] pub mod handle;
+//pub mod handle;

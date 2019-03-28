@@ -1,8 +1,9 @@
 //! The underlying traits used to define event handlers.
 
 use crate::events::*;
+use std::future::Future;
 
-mod private {
+pub(crate) mod private {
     pub trait Sealed { }
 }
 
@@ -28,49 +29,98 @@ phases! {
                      execute after the main actions of an event.")
 }
 
-/// The generic base trait used to define [`EventDispatch`]s.
+/// Distinguisher for the actual default handler invoked by [`Handler`]
+pub enum DefaultHandler { }
+
+/// The base trait used to mark event dispatchers.
+pub trait Events: 'static + Sized {
+    /// Gets a service from this event dispatch.
+    fn get_service<S>(&self) -> Option<&S>;
+}
+
+/// A trait that defines a phase of handling a particular event.
 ///
-/// Each method of [`RawEventDispatch`] takes the [`EventDispatch`] the event was
-/// originally dispatched into in the `target` parameter, the event itself in the `ev`
-/// parameter, and the event's current state in the `state` parameter.
-///
-/// The methods are called in the following order:<br>
-/// `EvInit` -> `EvCheck` -> `EvBeforeEvent` -> `EvOnEvent` -> `EvAfterEvent`
-///
-/// This trait should only be implemented directly for advanced manipulations of the
-/// events system. Most users should rely on `#[derive(RawEventDispatch)]` and `#[event_dispatch]`
-/// instead.
-pub trait RawEventDispatch: Sized + 'static {
+/// # Type parameters
+/// * `'a`: A lifetime parameter for `on_phase_async`. Used as a hack due to the unusability of
+///         GATs.
+/// * `E`: The type of event handler this event is being dispatched into.
+/// * `Ev`: The event this handler is for.
+/// * `P`: The event phase this handler is for.
+/// * `D`: A distinguisher used internally by the `#[event_dispatch]` to allow overlapping event
+///        handler implementations. This defaults to [`DefaultHandler`], which is what [`Handler`]
+///        actually invokes events with/
+pub trait EventHandler<E: Events, Ev: Event, P: EventPhase, D = DefaultHandler>: Events {
+    /// `true` if this `EventHandler` actually does anything. Used for optimizations.
+    const IS_IMPLEMENTED: bool;
+
     /// Runs a phase of this event.
-    fn on_phase<E: Event, P: EventPhase, D: EventDispatch>(
-        &self, target: &D, ev: &mut E, state: &mut E::State,
+    fn on_phase(
+        &self, target: &Handler<E>, ev: &mut Ev, state: &mut Ev::State,
     ) -> EventResult;
 
-    /// Gets a service from this event dispatch.
-    fn get_service<S>(&self) -> Option<&S>;
+    /// The type of the future used by this event handler.
+    type FutureType: Future<Output = EventResult>;
+
+    /// Runs a phase of this event asynchronously.
+    ///
+    /// # Safety
+    /// This function erases the implicit bound of the output on all the input parameters. Care
+    /// must be taken to restore them or avoid breaking lifetime restrictions.
+    unsafe fn on_phase_async(ctx: AsyncDispatchContext<Self, E, Ev>) -> Self::FutureType;
 }
 
-/// A handler that receives [`Event`]s and processes them in some way.
-///
-/// This is not meant to define be defined directly. See [`RawEventDispatch`] instead.
-pub trait EventDispatch: Sized + 'static {
-    /// Dispatches an event and returns its result.
-    fn dispatch<E: Event>(&self, _: E) -> E::RetVal;
-
-    /// Gets a service from this event dispatch.
-    fn get_service<S>(&self) -> Option<&S>;
-
-    /// Downcasts this event handler
-    fn downcast_ref<T>(&self) -> Option<&T>;
+/// A wrapper for the parameters to [`EventHandler::on_phase_async`] to preserve [`Sync`]/[`Send`]
+/// status across the pointers used.
+pub struct AsyncDispatchContext<T: Events, E: Events, Ev: Event> {
+    pub(crate) this: *const T,
+    pub(crate) target: *const Handler<E>,
+    pub(crate) ev: *mut Ev,
+    pub(crate) state: *mut Ev::State,
 }
-impl <T: RawEventDispatch> EventDispatch for T {
-    fn dispatch<E: Event>(&self, mut ev: E) -> E::RetVal {
+impl <T: Events, E: Events, Ev: Event> AsyncDispatchContext<T, E, Ev> {
+    pub unsafe fn this(&self) -> &T { &*(self.this) }
+    pub unsafe fn target(&self) -> &Handler<E> { &*(self.target) }
+    pub unsafe fn ev(&self) -> &mut Ev { &mut *(self.ev) }
+    pub unsafe fn state(&self) -> &mut Ev::State { &mut *(self.state) }
+}
+unsafe impl <T: Events, E: Events, Ev: Event> Send for AsyncDispatchContext<T, E, Ev>
+    where for <'a> &'a T: Send,
+          for <'a> &'a Handler<E>: Send,
+          for <'a> &'a mut Ev: Send,
+          for <'a> &'a mut Ev::State: Send { }
+unsafe impl <T: Events, E: Events, Ev: Event> Sync for AsyncDispatchContext<T, E, Ev>
+    where for <'a> &'a T: Sync,
+          for <'a> &'a Handler<E>: Sync,
+          for <'a> &'a mut Ev: Sync,
+          for <'a> &'a mut Ev::State: Sync { }
+
+#[repr(transparent)]
+/// A wrapper for [`Events`] that allows dispatching events into them.
+pub struct Handler<E: Events>(E);
+impl <E: Events> Handler<E> {
+    pub fn new(e: E) -> Self {
+        Handler(e)
+    }
+
+    pub fn get_service<S>(&self) -> Option<&S> {
+        self.0.get_service()
+    }
+
+    pub fn downcast_ref<E2: Events>(&self) -> Option<&Handler<E2>> {
+        crate::private::CheckDowncast::<Handler<E2>>::downcast_ref(self)
+    }
+
+    pub fn dispatch<Ev: Event>(&self, mut ev: Ev) -> Ev::RetVal {
         let mut state = ev.starting_state(self);
         macro_rules! do_phase {
             ($phase:ident) => {
-                match self.on_phase::<E, $phase, Self>(self, &mut ev, &mut state) {
-                    EventResult::EvOk | EventResult::EvCancelStage => { }
-                    EventResult::EvCancel => return ev.to_return_value(self, state),
+                if crate::private::is_implemented::<E, E, Ev, $phase, DefaultHandler>() {
+                    match crate::private::on_phase::<E, E, Ev, $phase, DefaultHandler>(
+                        &self.0, self, &mut ev, &mut state
+                    ) {
+                        EventResult::EvOk | EventResult::EvCancelStage => { }
+                        EventResult::EvCancel => return ev.to_return_value(self, state),
+                    }
                 }
             }
         }
@@ -82,15 +132,30 @@ impl <T: RawEventDispatch> EventDispatch for T {
         ev.to_return_value(self, state)
     }
 
-    fn get_service<S>(&self) -> Option<&S> {
-        self.get_service()
-    }
-
-    fn downcast_ref<U>(&self) -> Option<&U> {
-        crate::private::CheckDowncast::<U>::downcast_ref(self)
+    pub async fn dispatch_async<'a, Ev: Event + 'a>(&'a self, mut ev: Ev) -> Ev::RetVal {
+        let mut state = ev.starting_state(self);
+        macro_rules! do_phase {
+            ($phase:ident) => {
+                if crate::private::is_implemented::<E, E, Ev, $phase, DefaultHandler>() {
+                    match await!(crate::private::on_phase_async::<E, E, Ev, $phase, DefaultHandler>(
+                        &self.0, self, &mut ev, &mut state
+                    )) {
+                        EventResult::EvOk | EventResult::EvCancelStage => { }
+                        EventResult::EvCancel => return ev.to_return_value(self, state),
+                    }
+                }
+            }
+        }
+        do_phase!(EvInit);
+        do_phase!(EvCheck);
+        do_phase!(EvBeforeEvent);
+        do_phase!(EvOnEvent);
+        do_phase!(EvAfterEvent);
+        ev.to_return_value(self, state)
     }
 }
 
+/*
 /// A [`RawEventDispatch`] that can be shared between threads.
 pub trait SyncRawEventDispatch: RawEventDispatch + Sync + Send { }
 impl <T: RawEventDispatch + Sync + Send> SyncEventDispatch for T { }
@@ -98,3 +163,4 @@ impl <T: RawEventDispatch + Sync + Send> SyncEventDispatch for T { }
 /// A [`EventDispatch`] that can be shared between threads.
 pub trait SyncEventDispatch: EventDispatch + Sync + Send { }
 impl <T: EventDispatch + Sync + Send> SyncEventDispatch for T { }
+*/
