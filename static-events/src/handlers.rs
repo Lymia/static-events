@@ -41,8 +41,6 @@ pub trait Events: 'static + Sized {
 /// A trait that defines a phase of handling a particular event.
 ///
 /// # Type parameters
-/// * `'a`: A lifetime parameter for `on_phase_async`. Used as a hack due to the unusability of
-///         GATs.
 /// * `E`: The type of event handler this event is being dispatched into.
 /// * `Ev`: The event this handler is for.
 /// * `P`: The event phase this handler is for.
@@ -71,6 +69,8 @@ pub trait EventHandler<E: Events, Ev: Event, P: EventPhase, D = DefaultHandler>:
 
 /// A wrapper for the parameters to [`EventHandler::on_phase_async`] to preserve [`Sync`]/[`Send`]
 /// status across the pointers used.
+///
+/// This is part of a hack around a bug currently existing with `existential_type`.
 pub struct AsyncDispatchContext<T: Events, E: Events, Ev: Event> {
     pub(crate) this: *const T,
     pub(crate) target: *const Handler<E>,

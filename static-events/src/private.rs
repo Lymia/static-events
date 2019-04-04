@@ -6,6 +6,9 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Poll, Waker};
 
+#[doc(hidden)] pub use futures::executor::block_on;
+#[doc(hidden)] pub use std::result::Result;
+
 enum NullFuture { }
 impl Future for NullFuture {
     type Output = EventResult;
@@ -13,7 +16,6 @@ impl Future for NullFuture {
         unreachable!()
     }
 }
-
 trait UniversalEventHandler<E: Events, Ev: Event, P: EventPhase, D = DefaultHandler>: Events {
     const IS_IMPLEMENTED: bool;
 
@@ -24,9 +26,7 @@ trait UniversalEventHandler<E: Events, Ev: Event, P: EventPhase, D = DefaultHand
     type FutureType: Future<Output = EventResult>;
     unsafe fn on_phase_async(ctx: AsyncDispatchContext<Self, E, Ev>) -> Self::FutureType;
 }
-impl <E: Events, Ev: Event, P: EventPhase, D, T: Events> UniversalEventHandler<E, Ev, P, D>
-    for T
-{
+impl <E: Events, Ev: Event, P: EventPhase, D, T: Events> UniversalEventHandler<E, Ev, P, D> for T {
     default const IS_IMPLEMENTED: bool = false;
 
     default fn on_phase(
@@ -57,18 +57,23 @@ impl <
     }
 }
 
+#[inline(always)]
 pub const fn is_implemented<T: Events, E: Events, Ev: Event, P: EventPhase, D>() -> bool {
     <T as UniversalEventHandler<E, Ev, P, D>>::IS_IMPLEMENTED
 }
+
+#[inline(always)]
 pub fn on_phase<T: Events, E: Events, Ev: Event, P: EventPhase, D>(
     this: &T, target: &Handler<E>, ev: &mut Ev, state: &mut Ev::State,
 ) -> EventResult {
     if is_implemented::<T, E, Ev, P, D>() {
         UniversalEventHandler::<E, Ev, P, D>::on_phase(this, target, ev, state)
     } else {
-        EvOk
+        EventResult::EvOk
     }
 }
+
+#[inline(always)]
 pub async fn on_phase_async<'a, T: Events, E: Events, Ev: Event, P: EventPhase, D>(
     this: &'a T, target: &'a Handler<E>, ev: &'a mut Ev, state: &'a mut Ev::State,
 ) -> EventResult {
@@ -79,9 +84,11 @@ pub async fn on_phase_async<'a, T: Events, E: Events, Ev: Event, P: EventPhase, 
         };
         await!(future)
     } else {
-        EvOk
+        EventResult::EvOk
     }
 }
+
+pub enum HandlerImplBlock { }
 
 pub trait CheckDowncast<A> {
     fn downcast_ref(&self) -> Option<&A>;
@@ -96,9 +103,6 @@ impl <A, B> CheckDowncast<B> for A {
         None
     }
 }
-
-#[doc(hidden)] pub use std::result::Result;
-use crate::events::EventResult::EvOk;
 
 pub struct FailableReturn<E>(pub Result<EventResult, E>);
 impl <E> Default for FailableReturn<E> {

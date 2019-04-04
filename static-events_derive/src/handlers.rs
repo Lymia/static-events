@@ -1,4 +1,4 @@
-use darling::*;
+use crate::common::*;
 use proc_macro::TokenStream;
 use proc_macro2::{TokenStream as SynTokenStream, Span as SynSpan};
 use std::result::Result;
@@ -6,15 +6,66 @@ use syn::*;
 use syn::spanned::Spanned;
 use quote::{quote, ToTokens};
 
-// TODO: Figure out a way to handle elided lifetimes
+// TODO: Figure out what to do with elided type parameters in function arguments.
 
 #[derive(Debug)]
 enum HandlerArg {
     SelfParam,
-    ImplParam,
-    Borrow(Type),
+    TargetParam,
+    OtherParam(Type),
 }
 impl HandlerArg {
+    fn generic_argument_contains_impl(arg: &GenericArgument) -> bool {
+        match arg {
+            GenericArgument::Type(tp) => Self::type_contains_impl(tp),
+            _ => false,
+        }
+    }
+    fn path_segment_contains_impl(seg: &PathSegment) -> bool {
+        match &seg.arguments {
+            PathArguments::None => false,
+            PathArguments::AngleBracketed(paren) =>
+                paren.args.iter().any(|x| Self::generic_argument_contains_impl(x)),
+            PathArguments::Parenthesized(_) => false,
+        }
+    }
+    fn type_contains_impl(tp: &Type) -> bool {
+        match tp {
+            Type::Paren(paren) => Self::type_contains_impl(&paren.elem),
+            Type::Group(group) => Self::type_contains_impl(&group.elem),
+            Type::Path(path) =>
+                path.path.segments.iter().any(|x| Self::path_segment_contains_impl(x)),
+            Type::ImplTrait(_) => true,
+            _ => false,
+        }
+    }
+
+    fn check_reference_type(tp: &Type) -> Result<HandlerArg, ()> {
+        match tp {
+            Type::Paren(paren) => Self::check_reference_type(&paren.elem),
+            Type::Group(group) => Self::check_reference_type(&group.elem),
+            Type::Path(_) => Ok(if Self::type_contains_impl(tp) {
+                HandlerArg::TargetParam
+            } else {
+                HandlerArg::OtherParam((*tp).clone())
+            }),
+            _ => Ok(HandlerArg::OtherParam((*tp).clone())),
+        }
+    }
+    fn check_any_type(tp: &Type) -> Result<HandlerArg, ()> {
+        match tp {
+            Type::Reference(ref_tp) => Self::check_reference_type(&ref_tp.elem),
+            Type::Paren(paren) => Self::check_any_type(&paren.elem),
+            Type::Group(group) => Self::check_any_type(&group.elem),
+            _ => {
+                tp.span().unstable()
+                    .error("Event handlers must take parameters by reference.")
+                    .emit();
+                Err(())
+            }
+        }
+    }
+
     fn from_param(param: &FnArg) -> Result<HandlerArg, ()> {
         match param {
             FnArg::SelfValue(_) => {
@@ -31,21 +82,15 @@ impl HandlerArg {
             } else {
                 Ok(HandlerArg::SelfParam)
             },
-            FnArg::Ignored(ty) | FnArg::Captured(ArgCaptured { ty, .. }) => match ty {
-                Type::Reference(TypeReference { elem, .. }) => match &**elem {
-                    Type::ImplTrait(_) => Ok(HandlerArg::ImplParam),
-                    elem => Ok(HandlerArg::Borrow(elem.clone())),
-                },
-                _ => {
-                    ty.span().unstable()
-                        .error("Event handlers must take parameters by reference.")
-                        .emit();
-                    Err(())
-                }
-            },
+            FnArg::Ignored(ty) | FnArg::Captured(ArgCaptured { ty, .. }) =>
+                Self::check_any_type(ty),
             FnArg::Inferred(_) => unreachable!(),
         }
     }
+}
+
+enum EventHandlerBody {
+    Sync(SynTokenStream), Async(SynTokenStream),
 }
 
 struct HandlerSig {
@@ -56,13 +101,14 @@ struct HandlerSig {
     event_ty: Type,
     state_param: Option<SynSpan>,
     is_unsafe: bool,
+    is_async: bool,
 }
 impl HandlerSig {
     fn find_signature(method: &ImplItemMethod) -> Result<HandlerSig, ()> {
         let sig = &method.sig;
-        if sig.asyncness.is_some() || sig.decl.variadic.is_some() {
+        if sig.decl.variadic.is_some() {
             sig.span().unstable()
-                .error("Event handlers cannot be async, or variadic.")
+                .error("Event handlers cannot be variadic.")
                 .emit();
             return Err(())
         }
@@ -81,15 +127,16 @@ impl HandlerSig {
             event_ty: Type::Verbatim(TypeVerbatim { tts: SynTokenStream::new() }),
             state_param: None,
             is_unsafe: sig.unsafety.is_some(),
+            is_async: sig.asyncness.is_some(),
         };
 
         if let Some((HandlerArg::SelfParam, _)) = params.peek() {
             handler_sig.self_param = Some(params.next().unwrap().1);
         }
-        if let Some((HandlerArg::ImplParam, _)) = params.peek() {
+        if let Some((HandlerArg::TargetParam, _)) = params.peek() {
             handler_sig.target_param = Some(params.next().unwrap().1);
         }
-        if let Some((HandlerArg::Borrow(ty), _)) = params.next() {
+        if let Some((HandlerArg::OtherParam(ty), _)) = params.next() {
             handler_sig.event_ty = ty;
         } else {
             sig.span().unstable()
@@ -97,7 +144,7 @@ impl HandlerSig {
                 .emit();
             return Err(())
         }
-        if let Some((HandlerArg::Borrow(_), _)) = params.peek() {
+        if let Some((HandlerArg::OtherParam(_), _)) = params.peek() {
             handler_sig.state_param = Some(params.next().unwrap().1);
         }
         if let Some((_, span)) = params.next() {
@@ -110,7 +157,7 @@ impl HandlerSig {
         Ok(handler_sig)
     }
 
-    fn make_call(&self) -> SynTokenStream {
+    fn make_body(&self) -> EventHandlerBody {
         let name = &self.fn_name;
         let call = match self.self_param {
             Some(_) => quote! { self.#name },
@@ -124,21 +171,22 @@ impl HandlerSig {
             Some(_) => quote! { _state, },
             None    => quote! {},
         };
-        let call = quote! { #call (#target ev, #state) };
-        if !self.is_unsafe {
+        let call = quote! { #call (#target _ev, #state) };
+        let call = if !self.is_unsafe {
             call
         } else {
             quote! { unsafe { #call } }
+        };
+        if self.is_async {
+            EventHandlerBody::Async(quote! { r#await!(#call) })
+        } else {
+            EventHandlerBody::Sync(call)
         }
     }
 }
 
-fn last_path_segment(path: &Path) -> String {
-    (&path.segments).into_iter().last().expect("Empty path?").ident.to_string()
-}
-
 enum HandlerType {
-    Normal(SynTokenStream),
+    EventHandler(SynTokenStream),
 }
 impl HandlerType {
     fn is_attr(attr: &Attribute) -> bool {
@@ -147,11 +195,10 @@ impl HandlerType {
             _ => false,
         }
     }
-
     fn for_attr(attr: &Attribute) -> Result<Option<HandlerType>, ()> {
         match last_path_segment(&attr.path).as_str() {
             "event_handler" => {
-                Ok(Some(HandlerType::Normal(if !attr.tts.is_empty() {
+                Ok(Some(HandlerType::EventHandler(if !attr.tts.is_empty() {
                     match parse2::<TypeParen>(attr.tts.clone()) {
                         Ok(tp) => tp.elem.into_token_stream(),
                         Err(_) => {
@@ -169,16 +216,15 @@ impl HandlerType {
             _ => Ok(None),
         }
     }
-
     fn name(&self) -> &'static str {
         match self {
-            HandlerType::Normal(_) => "#[event_handler]",
+            HandlerType::EventHandler(_) => "#[event_handler]",
         }
     }
 }
 
 enum MethodInfo {
-    Normal { phase: SynTokenStream, sig: HandlerSig },
+    EventHandler { phase: SynTokenStream, sig: HandlerSig },
 }
 impl MethodInfo {
     fn for_method(method: &ImplItemMethod) -> Result<Option<MethodInfo>, ()> {
@@ -202,39 +248,166 @@ impl MethodInfo {
             }
         }
         match handler_type {
-            Some(HandlerType::Normal(phase)) => {
+            Some(HandlerType::EventHandler(phase)) => {
                 let sig = HandlerSig::find_signature(method)?;
-                Ok(Some(MethodInfo::Normal { phase, sig }))
+                Ok(Some(MethodInfo::EventHandler { phase, sig }))
             }
             None => Ok(None),
         }
     }
+}
 
-    fn create_handler_impl(
-        self, self_ty: &Type, impl_generics: &Generics, phantom: &Ident,
-    ) -> SynTokenStream {
-        let (event_ty, phase, method_generics, fn_body) = match self {
-            MethodInfo::Normal { phase, sig } => {
-                let call = sig.make_call();
-                (sig.event_ty, phase, sig.method_generics, quote! { #call.into() })
+fn create_normal_handler(
+    ctx: &GensymContext, self_ty: &Type, impl_generics: &Generics, phantom: &Ident,
+    phase: &SynTokenStream, sig: &HandlerSig,
+) -> SynTokenStream {
+    let ctx = ctx.derive(phantom);
+
+    let fn_async_impl = ctx.gensym("async_handler_impl");
+    let fn_async = ctx.gensym("async_handler");
+
+    let event_ty = &sig.event_ty;
+    let event_ty_event = quote! { <#event_ty as ::static_events::Event> };
+
+    let method_generics = &sig.method_generics;
+    let merged_generics = merge_generics(impl_generics, method_generics);
+
+    let async_generics_raw = quote! { __EventDispatch: ::static_events::Events };
+    let async_generics = generics(&async_generics_raw);
+    let async_generics = merge_generics(method_generics, &async_generics);
+
+    let async_impl_generics_raw = quote! { '__EventLifetime, #async_generics_raw };
+    let async_impl_generics = generics(&async_impl_generics_raw);
+    let async_impl_generics = merge_generics(method_generics, &async_impl_generics);
+
+    let handler_generics = generics(&async_generics_raw);
+    let handler_generics = merge_generics(&merged_generics, &handler_generics);
+
+    let (self_impl_bounds, _, self_where_bounds) =
+        impl_generics.split_for_impl();
+    let (async_bounds, async_ty_param, async_where_bounds) =
+        async_generics.split_for_impl();
+    let (async_impl_bounds, _, async_impl_where_bounds) =
+        async_impl_generics.split_for_impl();
+    let (handler_impl_bounds, _, handler_where_bounds) =
+        handler_generics.split_for_impl();
+
+    let async_turbofish = async_ty_param.as_turbofish();
+
+    let (sync_body, async_body) = match sig.make_body() {
+        EventHandlerBody::Sync(sync_body) => (
+            sync_body.clone(), sync_body,
+        ),
+        EventHandlerBody::Async(async_body) => (
+            quote! {
+                ::static_events::private::block_on(
+                    self.#fn_async_impl #async_turbofish(self, _target, _ev, _state)
+                )
+            },
+            async_body
+        ),
+    };
+
+    quote! {
+        impl #self_impl_bounds #self_ty #self_where_bounds {
+            #[inline(always)]
+            async fn #fn_async_impl #async_impl_bounds (
+                &'__EventLifetime self,
+                _target: &'__EventLifetime ::static_events::Handler<__EventDispatch>,
+                _ev: &'__EventLifetime mut #event_ty,
+                _state: &'__EventLifetime mut #event_ty_event::State,
+            ) -> ::static_events::EventResult #async_impl_where_bounds {
+                _ev.to_event_result(_state, (#async_body).into())
             }
-        };
 
-        let merged = crate::merge_generics(&method_generics, impl_generics);
-        let (impl_bounds, _, where_bounds) = merged.split_for_impl();
-        quote! {
-            impl #impl_bounds
-                ::static_events::private::EventHandler<#event_ty, #phase, #phantom> for #self_ty
-                #where_bounds
-            {
-                fn on_phase(
-                    &self, _target: &impl ::static_events::EventDispatch, ev: &mut #event_ty,
-                    _state: &mut <#event_ty as ::static_events::Event>::StateArg,
-                ) -> <#event_ty as ::static_events::Event>::MethodRetVal {
-                    #fn_body
-                }
+            #[inline(always)]
+            unsafe async fn #fn_async #async_bounds (
+                ctx: ::static_events::handlers::AsyncDispatchContext<
+                    Self, __EventDispatch, #event_ty,
+                >
+            ) -> ::static_events::EventResult #async_where_bounds {
+                let future = ctx.this().#fn_async_impl #async_turbofish(
+                    ctx.target(), ctx.ev(), ctx.state(),
+                );
+                r#await!(future)
             }
         }
+
+        impl #handler_impl_bounds ::static_events::handlers::EventHandler<
+            __EventDispatch, #event_ty, #phase, #phantom,
+        > for #self_ty #handler_where_bounds {
+            const IS_IMPLEMENTED: bool = true;
+
+            fn on_phase(
+                &self,
+                _target: &::static_events::Handler<__EventDispatch>,
+                _ev: &mut #event_ty,
+                _state: &mut #event_ty_event::State,
+            ) -> ::static_events::EventResult {
+                _ev.to_event_result(_state, (#sync_body).into())
+            }
+
+            existential type FutureType:
+                ::std::future::Future<Output = ::static_events::EventResult>;
+            unsafe fn on_phase_async(
+                ctx: ::static_events::handlers::AsyncDispatchContext<
+                    Self, __EventDispatch, #event_ty
+                >,
+            ) -> Self::FutureType {
+                Self::#fn_async #async_turbofish(ctx)
+            }
+        }
+    }
+}
+fn create_impls(
+    ctx: &GensymContext, self_ty: &Type, impl_generics: &Generics, methods: &[MethodInfo],
+) -> SynTokenStream {
+    let mut is_implemented_expr = SynTokenStream::new();
+    let mut on_phase = SynTokenStream::new();
+    let mut on_phase_async = SynTokenStream::new();
+    let mut impls = SynTokenStream::new();
+
+    for (i, info) in methods.iter().enumerate() {
+        match info {
+            MethodInfo::EventHandler { phase, sig } => {
+                let phantom = ctx.gensym_id("PhantomMarker", i);
+                impls.extend(quote! { enum #phantom { } });
+                impls.extend(create_normal_handler(
+                    ctx, self_ty, impl_generics, &phantom, phase, sig,
+                ));
+                is_implemented_expr.extend(
+                    is_implemented(self_ty, None));
+                on_phase.extend(
+                    dispatch_on_phase(quote!(self), self_ty, false, Some(quote! { #phantom })));
+                on_phase_async.extend(
+                    dispatch_on_phase(quote!(self), self_ty, true, Some(quote! { #phantom })));
+            }
+        }
+    }
+
+    let dist = Some(quote! { ::static_events::private::HandlerImplBlock });
+    let event_handler = make_universal_event_handler(
+        &ctx, EventHandlerTarget::Type(self_ty), impl_generics, dist,
+        quote! {
+            false #is_implemented_expr
+        },
+        quote! {
+            #on_phase
+            ::static_events::EvOk
+        },
+        quote! {
+            #on_phase_async
+            ::static_events::EvOk
+        },
+    );
+
+    let impl_name = ctx.gensym("ImplBlocksWrapper");
+    quote! {
+        const #impl_name: () = {
+            #impls
+            #event_handler
+            ()
+        };
     }
 }
 
@@ -247,43 +420,12 @@ fn mark_attrs_processed(method: &mut ImplItemMethod) {
     }
 }
 
-struct VisibilityAttr(Visibility);
-impl Default for VisibilityAttr {
-    fn default() -> Self {
-        VisibilityAttr(Visibility::Public(VisPublic { pub_token: Default::default() }))
-    }
-}
-impl FromMeta for VisibilityAttr {
-    fn from_string(value: &str) -> darling::Result<Self> {
-        parse_str(value).map(VisibilityAttr).map_err(|_| darling::Error::unknown_value(value))
-    }
-}
-
-#[derive(Default, FromDeriveInput)]
-#[darling(default, attributes(event_dispatch))]
-struct EventDispatchAttr {
-    export_service: bool,
-}
-
-pub fn event_dispatch(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let attrs = match EventDispatchAttr::from_derive_input({
-        let attr = SynTokenStream::from(attr.clone());
-        &parse2::<DeriveInput>(quote!{ #[event_dispatch(#attr)] struct FakeStruct { } }).unwrap()
-    }) {
-        Ok(attrs) => attrs,
-        Err(e) if !attr.is_empty() => {
-            crate::stream_span(attr)
-                .error("Could not parse #[event_dispatch] attribute.")
-                .note(format!("{}", e))
-                .emit();
-            return item
-        }
-        _ => EventDispatchAttr::default(),
-    };
+pub fn events_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let ctx = GensymContext::new(&format_args!("({})({})", attr, item));
     let mut impl_block = match parse::<ItemImpl>(item.clone()) {
         Ok(block) => block,
         Err(_) => {
-            crate::stream_span(item.clone())
+            stream_span(item.clone())
                 .error("#[event_dispatch] can only be used on impl blocks.")
                 .emit();
             return item
@@ -310,74 +452,9 @@ pub fn event_dispatch(attr: TokenStream, item: TokenStream) -> TokenStream {
         return TokenStream::from(quote! { #impl_block })
     }
 
-    let impl_id = crate::impl_id();
-    let mut impls = SynTokenStream::new();
-    let mut on_phase_impls = SynTokenStream::new();
-    for (i, handler) in handlers.into_iter().enumerate() {
-        let phantom_name =
-            Ident::new(&format!("__ImplEventDispatch_Phantom_{}_{}", impl_id, i),
-                       SynSpan::call_site());
-        let universal_handler = quote! { ::static_events::private::UniversalEventHandler };
-        let universal_params = quote! { <__EventType, __EventPhase, #phantom_name> };
-
-        let handler_impl =
-            handler.create_handler_impl(&impl_block.self_ty, &impl_block.generics, &phantom_name);
-        impls.extend(quote! {
-            enum #phantom_name { }
-            #handler_impl
-        });
-        on_phase_impls.extend(quote! {
-            if <Self as #universal_handler #universal_params>::IS_IMPLEMENTED {
-                let result = {
-                    let state_arg = ev.borrow_state(state);
-                    #universal_handler::#universal_params::on_phase(self, target, ev, state_arg)
-                };
-                match ev.to_event_result(state, result) {
-                    ::static_events::EvOk => { }
-                    e => return e,
-                }
-            }
-        });
-    }
-    let main_impl = {
-        let get_service_body = if attrs.export_service {
-            quote! {
-                ::static_events::private::CheckDowncast::<__DowncastTarget>::downcast_ref(self)
-            }
-        } else {
-            quote! { None }
-        };
-
-        let (impl_bounds, _, where_bounds) = impl_block.generics.split_for_impl();
-        let ty = &impl_block.self_ty;
-        quote! {
-            impl #impl_bounds ::static_events::handlers::RawEventDispatch for #ty #where_bounds {
-                fn on_phase<
-                    __EventType: ::static_events::Event,
-                    __EventPhase: ::static_events::handlers::EventPhase,
-                    __EventDispatch: ::static_events::EventDispatch,
-                >(
-                    &self, target: &__EventDispatch,
-                    ev: &mut __EventType, state: &mut __EventType::State,
-                ) -> ::static_events::EventResult {
-                    #on_phase_impls
-                    ::static_events::EvOk
-                }
-
-                fn get_service<__DowncastTarget>(&self) -> Option<&__DowncastTarget> {
-                    #get_service_body
-                }
-            }
-        }
-    };
-
-    let impl_name = Ident::new(&format!("__ImplEventDispatch_{}", impl_id), SynSpan::call_site());
+    let const_block = create_impls(&ctx, &impl_block.self_ty, &impl_block.generics, &handlers);
     TokenStream::from(quote! {
         #impl_block
-        const #impl_name: () = {
-            #impls
-            #main_impl
-            ()
-        };
+        #const_block
     })
 }
