@@ -7,6 +7,7 @@ use syn::spanned::Spanned;
 use quote::{quote, ToTokens};
 
 // TODO: Figure out what to do with elided type parameters in function arguments.
+// TODO: Properly handle lifetimes in general for method arguments.
 
 #[derive(Debug)]
 enum HandlerArg {
@@ -263,36 +264,35 @@ fn create_normal_handler(
 ) -> SynTokenStream {
     let ctx = ctx.derive(phantom);
 
-    let fn_async_impl = ctx.gensym("async_handler_impl");
     let fn_async = ctx.gensym("async_handler");
+    let existential = ctx.gensym("FutureTypeExistential");
 
     let event_ty = &sig.event_ty;
     let event_ty_event = quote! { <#event_ty as ::static_events::Event> };
 
-    let method_generics = &sig.method_generics;
-    let merged_generics = merge_generics(impl_generics, method_generics);
+    let method_generics = strip_lifetimes(&sig.method_generics);
+    let merged_generics = merge_generics(impl_generics, &method_generics);
 
-    let async_generics_raw = quote! { __EventDispatch: ::static_events::Events };
+    let async_generics_raw = quote! {
+        '__EventLifetime,
+        __EventDispatch: ::static_events::Events,
+    };
     let async_generics = generics(&async_generics_raw);
-    let async_generics = merge_generics(method_generics, &async_generics);
-
-    let async_impl_generics_raw = quote! { '__EventLifetime, #async_generics_raw };
-    let async_impl_generics = generics(&async_impl_generics_raw);
-    let async_impl_generics = merge_generics(method_generics, &async_impl_generics);
+    let async_generics = merge_generics(&method_generics, &async_generics);
 
     let handler_generics = generics(&async_generics_raw);
     let handler_generics = merge_generics(&merged_generics, &handler_generics);
 
     let (self_impl_bounds, _, self_where_bounds) =
         impl_generics.split_for_impl();
-    let (async_bounds, async_ty_param, async_where_bounds) =
+    let (async_bounds, _, async_where_bounds) =
         async_generics.split_for_impl();
-    let (async_impl_bounds, _, async_impl_where_bounds) =
-        async_impl_generics.split_for_impl();
-    let (handler_impl_bounds, _, handler_where_bounds) =
+    let (handler_impl_bounds, handler_ty_param, handler_where_bounds) =
         handler_generics.split_for_impl();
 
-    let async_turbofish = async_ty_param.as_turbofish();
+    let async_generics_no_lifetimes = strip_lifetimes(&async_generics);
+    let async_ty_params = async_generics_no_lifetimes.split_for_impl().1;
+    let async_turbofish = async_ty_params.as_turbofish();
 
     let (sync_body, async_body) = match sig.make_body() {
         EventHandlerBody::Sync(sync_body) => (
@@ -301,7 +301,7 @@ fn create_normal_handler(
         EventHandlerBody::Async(async_body) => (
             quote! {
                 ::static_events::private::block_on(
-                    self.#fn_async_impl #async_turbofish(self, _target, _ev, _state)
+                    self.#fn_async #async_turbofish(_target, _ev, _state)
                 )
             },
             async_body
@@ -311,50 +311,46 @@ fn create_normal_handler(
     quote! {
         impl #self_impl_bounds #self_ty #self_where_bounds {
             #[inline(always)]
-            async fn #fn_async_impl #async_impl_bounds (
+            async fn #fn_async #async_bounds (
                 &'__EventLifetime self,
                 _target: &'__EventLifetime ::static_events::Handler<__EventDispatch>,
                 _ev: &'__EventLifetime mut #event_ty,
                 _state: &'__EventLifetime mut #event_ty_event::State,
-            ) -> ::static_events::EventResult #async_impl_where_bounds {
-                _ev.to_event_result(_state, (#async_body).into())
-            }
-
-            #[inline(always)]
-            unsafe async fn #fn_async #async_bounds (
-                ctx: ::static_events::handlers::AsyncDispatchContext<
-                    Self, __EventDispatch, #event_ty,
-                >
             ) -> ::static_events::EventResult #async_where_bounds {
-                let future = ctx.this().#fn_async_impl #async_turbofish(
-                    ctx.target(), ctx.ev(), ctx.state(),
-                );
-                r#await!(future)
+                let ev_result = (#async_body).into();
+                _ev.to_event_result(_state, ev_result)
             }
         }
 
+        existential type #existential #handler_generics:
+            ::std::future::Future<Output = ::static_events::EventResult> + '__EventLifetime;
+
         impl #handler_impl_bounds ::static_events::handlers::EventHandler<
-            __EventDispatch, #event_ty, #phase, #phantom,
+            '__EventLifetime, __EventDispatch, #event_ty, #phase, #phantom,
         > for #self_ty #handler_where_bounds {
             const IS_IMPLEMENTED: bool = true;
 
+            #[inline(always)]
             fn on_phase(
-                &self,
-                _target: &::static_events::Handler<__EventDispatch>,
-                _ev: &mut #event_ty,
-                _state: &mut #event_ty_event::State,
+                &'__EventLifetime self,
+                _target: &'__EventLifetime ::static_events::Handler<__EventDispatch>,
+                _ev: &'__EventLifetime mut #event_ty,
+                _state: &'__EventLifetime mut #event_ty_event::State,
             ) -> ::static_events::EventResult {
-                _ev.to_event_result(_state, (#sync_body).into())
+                let ev_result = (#sync_body).into();
+                _ev.to_event_result(_state, ev_result)
             }
 
-            existential type FutureType:
-                ::std::future::Future<Output = ::static_events::EventResult>;
-            unsafe fn on_phase_async(
-                ctx: ::static_events::handlers::AsyncDispatchContext<
-                    Self, __EventDispatch, #event_ty
-                >,
-            ) -> Self::FutureType {
-                Self::#fn_async #async_turbofish(ctx)
+            type FutureType = #existential #handler_ty_param;
+
+            #[inline(always)]
+            fn on_phase_async (
+                &'__EventLifetime self,
+                target: &'__EventLifetime ::static_events::Handler<__EventDispatch>,
+                ev: &'__EventLifetime mut #event_ty,
+                state: &'__EventLifetime mut #event_ty_event::State,
+            ) -> #existential #handler_ty_param {
+                self.#fn_async #async_turbofish(target, ev, state)
             }
         }
     }
@@ -376,7 +372,7 @@ fn create_impls(
                     ctx, self_ty, impl_generics, &phantom, phase, sig,
                 ));
                 is_implemented_expr.extend(
-                    is_implemented(self_ty, None));
+                    is_implemented(self_ty, Some(quote! { #phantom })));
                 on_phase.extend(
                     dispatch_on_phase(quote!(self), self_ty, false, Some(quote! { #phantom })));
                 on_phase_async.extend(
@@ -403,6 +399,7 @@ fn create_impls(
 
     let impl_name = ctx.gensym("ImplBlocksWrapper");
     quote! {
+        #[allow(non_snake_case)]
         const #impl_name: () = {
             #impls
             #event_handler

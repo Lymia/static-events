@@ -160,6 +160,7 @@ impl DerivedImpl {
 
         let impl_name = ctx.gensym("DeriveWrapper");
         quote! {
+            #[allow(non_snake_case)]
             const #impl_name: () = {
                 impl #impl_bounds ::static_events::Events for #name #ty_param #where_bounds {
                     fn get_service<__DowncastTarget>(&self) -> Option<&__DowncastTarget> {

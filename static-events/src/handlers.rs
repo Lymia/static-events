@@ -41,58 +41,30 @@ pub trait Events: 'static + Sized {
 /// A trait that defines a phase of handling a particular event.
 ///
 /// # Type parameters
+/// * `'a`: The lifetime the async portion of this event handler is linked to.
 /// * `E`: The type of event handler this event is being dispatched into.
 /// * `Ev`: The event this handler is for.
 /// * `P`: The event phase this handler is for.
 /// * `D`: A distinguisher used internally by the `#[event_dispatch]` to allow overlapping event
 ///        handler implementations. This defaults to [`DefaultHandler`], which is what [`Handler`]
 ///        actually invokes events with/
-pub trait EventHandler<E: Events, Ev: Event, P: EventPhase, D = DefaultHandler>: Events {
+pub trait EventHandler<'a, E: Events, Ev: Event + 'a, P: EventPhase, D = DefaultHandler>: Events {
     /// `true` if this `EventHandler` actually does anything. Used for optimizations.
     const IS_IMPLEMENTED: bool;
 
     /// Runs a phase of this event.
     fn on_phase(
-        &self, target: &Handler<E>, ev: &mut Ev, state: &mut Ev::State,
+        &'a self, target: &'a Handler<E>, ev: &'a mut Ev, state: &'a mut Ev::State,
     ) -> EventResult;
 
     /// The type of the future used by this event handler.
-    type FutureType: Future<Output = EventResult>;
+    type FutureType: Future<Output = EventResult> + 'a;
 
     /// Runs a phase of this event asynchronously.
-    ///
-    /// # Safety
-    /// This function erases the implicit bound of the output on all the input parameters. Care
-    /// must be taken to restore them or avoid breaking lifetime restrictions.
-    unsafe fn on_phase_async(ctx: AsyncDispatchContext<Self, E, Ev>) -> Self::FutureType;
+    fn on_phase_async(
+        &'a self, target: &'a Handler<E>, ev: &'a mut Ev, state: &'a mut Ev::State,
+    ) -> Self::FutureType;
 }
-
-/// A wrapper for the parameters to [`EventHandler::on_phase_async`] to preserve [`Sync`]/[`Send`]
-/// status across the pointers used.
-///
-/// This is part of a hack around a bug currently existing with `existential_type`.
-pub struct AsyncDispatchContext<T: Events, E: Events, Ev: Event> {
-    pub(crate) this: *const T,
-    pub(crate) target: *const Handler<E>,
-    pub(crate) ev: *mut Ev,
-    pub(crate) state: *mut Ev::State,
-}
-impl <T: Events, E: Events, Ev: Event> AsyncDispatchContext<T, E, Ev> {
-    pub unsafe fn this(&self) -> &T { &*(self.this) }
-    pub unsafe fn target(&self) -> &Handler<E> { &*(self.target) }
-    pub unsafe fn ev(&self) -> &mut Ev { &mut *(self.ev) }
-    pub unsafe fn state(&self) -> &mut Ev::State { &mut *(self.state) }
-}
-unsafe impl <T: Events, E: Events, Ev: Event> Send for AsyncDispatchContext<T, E, Ev>
-    where for <'a> &'a T: Send,
-          for <'a> &'a Handler<E>: Send,
-          for <'a> &'a mut Ev: Send,
-          for <'a> &'a mut Ev::State: Send { }
-unsafe impl <T: Events, E: Events, Ev: Event> Sync for AsyncDispatchContext<T, E, Ev>
-    where for <'a> &'a T: Sync,
-          for <'a> &'a Handler<E>: Sync,
-          for <'a> &'a mut Ev: Sync,
-          for <'a> &'a mut Ev::State: Sync { }
 
 #[repr(transparent)]
 /// A wrapper for [`Events`] that allows dispatching events into them.
@@ -110,6 +82,7 @@ impl <E: Events> Handler<E> {
         crate::private::CheckDowncast::<Handler<E2>>::downcast_ref(self)
     }
 
+    #[inline(never)]
     pub fn dispatch<Ev: Event>(&self, mut ev: Ev) -> Ev::RetVal {
         let mut state = ev.starting_state(self);
         macro_rules! do_phase {
@@ -132,6 +105,7 @@ impl <E: Events> Handler<E> {
         ev.to_return_value(self, state)
     }
 
+    #[inline(never)]
     pub async fn dispatch_async<'a, Ev: Event + 'a>(&'a self, mut ev: Ev) -> Ev::RetVal {
         let mut state = ev.starting_state(self);
         macro_rules! do_phase {

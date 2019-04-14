@@ -1,4 +1,4 @@
-#![feature(const_fn, nll, specialization, futures_api, async_await, await_macro)]
+#![feature(const_fn, nll, specialization, futures_api, async_await, await_macro, gen_future)]
 
 // TODO: Implement filtering of some kind on events, and state between phases.
 
