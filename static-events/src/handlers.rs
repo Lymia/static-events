@@ -108,23 +108,28 @@ impl <E: Events> Handler<E> {
     #[inline(never)]
     pub async fn dispatch_async<'a, Ev: Event + 'a>(&'a self, mut ev: Ev) -> Ev::RetVal {
         let mut state = ev.starting_state(self);
-        macro_rules! do_phase {
-            ($phase:ident) => {
-                if crate::private::is_implemented::<E, E, Ev, $phase, DefaultHandler>() {
-                    match await!(crate::private::on_phase_async::<E, E, Ev, $phase, DefaultHandler>(
-                        &self.0, self, &mut ev, &mut state
-                    )) {
-                        EventResult::EvOk | EventResult::EvCancelStage => { }
-                        EventResult::EvCancel => return ev.to_return_value(self, state),
+        'outer: loop {
+            macro_rules! do_phase {
+                ($phase:ident) => {
+                    if crate::private::is_implemented::<E, E, Ev, $phase, DefaultHandler>() {
+                        match await!(unsafe { crate::private::on_phase_async::<
+                            E, E, Ev, $phase, DefaultHandler,
+                        >(
+                            &self.0, self, &mut ev, &mut state
+                        ) }) {
+                            EventResult::EvOk | EventResult::EvCancelStage => { }
+                            EventResult::EvCancel => break 'outer,
+                        }
                     }
                 }
             }
-        }
-        do_phase!(EvInit);
-        do_phase!(EvCheck);
-        do_phase!(EvBeforeEvent);
-        do_phase!(EvOnEvent);
-        do_phase!(EvAfterEvent);
+            do_phase!(EvInit);
+            do_phase!(EvCheck);
+            do_phase!(EvBeforeEvent);
+            do_phase!(EvOnEvent);
+            do_phase!(EvAfterEvent);
+            break 'outer
+        };
         ev.to_return_value(self, state)
     }
 }

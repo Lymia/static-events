@@ -3,17 +3,18 @@
 use crate::events::*;
 use crate::handlers::*;
 use std::future::Future;
+use std::hint::unreachable_unchecked;
 use std::pin::Pin;
 use std::task::{Poll, Context};
 
 #[doc(hidden)] pub use futures::executor::block_on;
 #[doc(hidden)] pub use std::result::Result;
 
-enum NullFuture { }
+struct NullFuture;
 impl Future for NullFuture {
     type Output = EventResult;
     fn poll(self: Pin<&mut Self>, _: &mut Context) -> Poll<Self::Output> {
-        unreachable!()
+        unsafe { unreachable_unchecked() }
     }
 }
 trait UniversalEventHandler<
@@ -37,14 +38,14 @@ impl <
     default fn on_phase(
         &'a self, _: &'a Handler<E>, _: &'a mut Ev, _: &'a mut Ev::State,
     ) -> EventResult {
-        panic!("Called missing event handler! (check IS_IMPLEMENTED)")
+        unsafe { unreachable_unchecked() }
     }
 
     default type FutureType = NullFuture;
     default fn on_phase_async(
         &'a self, _: &'a Handler<E>, _: &'a mut Ev, _: &'a mut Ev::State,
     ) -> Self::FutureType {
-        panic!("Called missing event handler! (check IS_IMPLEMENTED)")
+        unsafe { unreachable_unchecked() }
     }
 }
 impl <
@@ -75,8 +76,10 @@ pub const fn is_implemented<'a, T: Events, E: Events, Ev: Event + 'a, P: EventPh
 }
 
 #[inline(always)]
-pub fn on_phase<'a, T: Events, E: Events, Ev: Event + 'a, P: EventPhase, D>(
-    this: &'a T, target: &'a Handler<E>, ev: &'a mut Ev, state: &'a mut Ev::State,
+pub fn on_phase<
+    'a, 'b: 'a, 'c: 'a, 'd: 'a, 'e: 'a, T: Events, E: Events, Ev: Event + 'a, P: EventPhase, D,
+>(
+    this: &'b T, target: &'c Handler<E>, ev: &'d mut Ev, state: &'e mut Ev::State,
 ) -> EventResult {
     if is_implemented::<'a, T, E, Ev, P, D>() {
         UniversalEventHandler::<'a, E, Ev, P, D>::on_phase(this, target, ev, state)
@@ -86,15 +89,13 @@ pub fn on_phase<'a, T: Events, E: Events, Ev: Event + 'a, P: EventPhase, D>(
 }
 
 #[inline(always)]
-pub async fn on_phase_async<'a, T: Events, E: Events, Ev: Event + 'a, P: EventPhase, D>(
+pub unsafe fn on_phase_async<'a, T: Events, E: Events, Ev: Event + 'a, P: EventPhase + 'a, D: 'a>(
     this: &'a T, target: &'a Handler<E>, ev: &'a mut Ev, state: &'a mut Ev::State,
-) -> EventResult {
-    if is_implemented::<T, E, Ev, P, D>() {
-        let future =
-            <T as UniversalEventHandler<'a, E, Ev, P, D>>::on_phase_async(this, target, ev, state);
-        await!(future)
+) -> impl Future<Output = EventResult> + 'a {
+    if is_implemented::<'a, T, E, Ev, P, D>() {
+        <T as UniversalEventHandler<'a, E, Ev, P, D>>::on_phase_async(this, target, ev, state)
     } else {
-        EventResult::EvOk
+        unreachable_unchecked()
     }
 }
 

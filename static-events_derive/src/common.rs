@@ -88,10 +88,10 @@ pub fn dispatch_on_phase(
     let call_fn = if is_async { quote! { on_phase_async } } else { quote! { on_phase } };
     let call = quote! {
         ::static_events::private::#call_fn::<
-            '__EventLifetime, #tp, __EventDispatch, __EventType, __EventPhase, #distinguisher,
+            #tp, __EventDispatch, __EventType, __EventPhase, #distinguisher,
         >(#field, _target, _ev, _state)
     };
-    let call = if is_async { quote! { r#await!(#call) } } else { call };
+    let call = if is_async { quote! { r#await!(unsafe { #call }) } } else { call };
     quote! {{
         if ::static_events::private::is_implemented::<
             '__EventLifetime, #tp, __EventDispatch, __EventType, __EventPhase, #distinguisher,
