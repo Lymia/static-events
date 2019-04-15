@@ -44,9 +44,6 @@ pub trait Events: 'static + Sized {
 
 /// A trait that defines a phase of handling a particular event.
 ///
-/// This is not designed to be manually implemented, and is unsafe due to various internal
-/// optimizations done.
-///
 /// # Type parameters
 /// * `'a`: The lifetime the async portion of this event handler is linked to.
 /// * `E`: The type of event handler this event is being dispatched into.
@@ -72,9 +69,8 @@ pub trait EventHandler<'a, E: Events, Ev: Event + 'a, P: EventPhase, D = Default
 
     /// Runs a phase of this event asynchronously.
     ///
-    /// This function may execute undefined behavior if it is called if `IS_IMPLEMENTED` or
-    /// `IS_ASYNC` are false.
-    unsafe fn on_phase_async(
+    /// This function should only be called if `IS_IMPLEMENTED` or `IS_ASYNC` are false.
+    fn on_phase_async(
         &'a self, target: &'a Handler<E>, ev: &'a mut Ev, state: &'a mut Ev::State,
     ) -> Self::FutureType;
 }

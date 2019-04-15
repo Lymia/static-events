@@ -140,12 +140,11 @@ fn make_call(
         quote! { self.target, unsafe { &mut *self.ev }, unsafe { &mut *self.state } }
     };
     let call_fn = if is_async { quote! { on_phase_async } } else { quote! { on_phase } };
-    let call = quote! {
+    quote! {
         ::static_events::private::#call_fn::<
             #tp, __EventDispatch, __EventType, __EventPhase, #distinguisher,
         >(#field, #args)
-    };
-    if is_async { quote! { unsafe { #call } } } else { call }
+    }
 }
 pub fn make_merge_event_handler(
     ctx: &GensymContext, name: EventHandlerTarget, item_generics: &Generics,
@@ -437,7 +436,7 @@ pub fn make_merge_event_handler(
             >;
 
             #[inline(always)]
-            unsafe fn on_phase_async (
+            fn on_phase_async (
                 &'__EventLifetime self,
                 target: &'__EventLifetime ::static_events::Handler<__EventDispatch>,
                 ev: &'__EventLifetime mut __EventType,

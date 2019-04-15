@@ -2,6 +2,7 @@
 #![feature(existential_type)]
 
 // TODO: Implement filtering of some kind on events, and state between phases.
+// TODO: Reevaluate all our unsafety and optimization hacks as rustc's async support improves.
 
 //! A generic zero-cost event handler system. Event dispatches should get compiled down to a
 //! plain function that executes all handlers involved with no dynamic dispatches.
@@ -119,8 +120,6 @@
 //!
 //! As all event handlers are passed around using immutable pointers, locking or cells must be
 //! used to store state in handlers.
-
-// TODO: Reevaluate all our unsafety and optimization hacks as rustc's async support improves.
 
 #[allow(unused_imports)] use std::fmt::Debug;
 

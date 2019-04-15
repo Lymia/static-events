@@ -355,7 +355,7 @@ fn create_normal_handler(
             type FutureType = #future_ty;
 
             #[inline(always)]
-            unsafe fn on_phase_async (
+            fn on_phase_async (
                 &'__EventLifetime self,
                 target: &'__EventLifetime ::static_events::Handler<__EventDispatch>,
                 ev: &'__EventLifetime mut #event_ty,

@@ -65,7 +65,7 @@ pub trait UniversalEventHandler<
     ) -> EventResult;
 
     type FutureType: Future<Output = EventResult>;
-    unsafe fn on_phase_async(
+    fn on_phase_async(
         &'a self, target: &'a Handler<E>, ev: &'a mut Ev, state: &'a mut Ev::State,
     ) -> Self::FutureType;
 }
@@ -85,7 +85,7 @@ impl <
     default type FutureType = NullFuture;
 
     #[inline(always)]
-    default unsafe fn on_phase_async(
+    default fn on_phase_async(
         &'a self, _: &'a Handler<E>, _: &'a mut Ev, _: &'a mut Ev::State,
     ) -> Self::FutureType {
         event_error()
@@ -104,7 +104,7 @@ impl <
     }
     type FutureType = <Self as EventHandler<'a, E, Ev, P, D>>::FutureType;
     #[inline(always)]
-    unsafe fn on_phase_async(
+    fn on_phase_async(
         &'a self, target: &'a Handler<E>, ev: &'a mut Ev, state: &'a mut Ev::State,
     ) -> Self::FutureType {
         <Self as EventHandler<'a, E, Ev, P, D>>::on_phase_async(self, target, ev, state)
@@ -135,7 +135,7 @@ pub fn on_phase<
 }
 
 #[inline(always)]
-pub unsafe fn on_phase_async<'a, T: Events, E: Events, Ev: Event + 'a, P: EventPhase + 'a, D: 'a>(
+pub fn on_phase_async<'a, T: Events, E: Events, Ev: Event + 'a, P: EventPhase + 'a, D: 'a>(
     this: &'a T, target: &'a Handler<E>, ev: &'a mut Ev, state: &'a mut Ev::State,
 ) -> impl Future<Output = EventResult> + 'a {
     if is_implemented::<'a, T, E, Ev, P, D>() && is_async::<'a, T, E, Ev, P, D>() {
