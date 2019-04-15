@@ -1,4 +1,5 @@
 #![feature(const_fn, nll, specialization, futures_api, async_await, await_macro, gen_future)]
+#![feature(existential_type)]
 
 // TODO: Implement filtering of some kind on events, and state between phases.
 
@@ -123,7 +124,7 @@
 
 #[allow(unused_imports)] use std::fmt::Debug;
 
-pub use static_events_derive::*;
+pub use static_events_derive::{Events, events_impl, event_handler};
 
 mod events_types;
 pub use crate::events_types::*;

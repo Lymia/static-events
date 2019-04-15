@@ -1,7 +1,11 @@
 //! The underlying traits used to define event handlers.
 
 use crate::events::*;
+use std::cell::UnsafeCell;
 use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use crate::events::EventResult::EvOk;
 
 pub(crate) mod private {
     pub trait Sealed { }
@@ -75,6 +79,118 @@ pub trait EventHandler<'a, E: Events, Ev: Event + 'a, P: EventPhase, D = Default
     ) -> Self::FutureType;
 }
 
+macro_rules! make_existentials {
+    ($($id:ident)*) => {$(
+        existential type $id<'a, E: Events, Ev: Event>: Future<Output = EventResult> + 'a;
+    )*}
+}
+macro_rules! make_existential_fns {
+    ($(($name:ident $id:ident $phase:ident $do_phase:ident $do_resume:ident $next:ident))*) => {$(
+        unsafe fn $name(&self) -> $id<'a, E, Ev> {
+            crate::private::on_phase_async::<'a, E, E, Ev, $phase, DefaultHandler>(
+                &self.this.0, &self.this,
+                &mut *self.ev.get(), (&mut *self.state.get()).as_mut().unwrap(),
+            )
+        }
+
+        fn $do_phase(&mut self, cx: &mut Context<'_>) -> Poll<Ev::RetVal> {
+            self.fut_state = AsyncDispatchState::Errored;
+            if !crate::private::is_implemented::<'a, E, E, Ev, $phase, DefaultHandler>() {
+                self.$next(cx)
+            } else if !crate::private::is_async::<'a, E, E, Ev, $phase, DefaultHandler>() {
+                let result = unsafe {
+                    crate::private::on_phase::<E, E, Ev, $phase, DefaultHandler>(
+                        &self.this.0, &self.this,
+                        &mut *self.ev.get(), (&mut *self.state.get()).as_mut().unwrap(),
+                    )
+                };
+                match result {
+                    EvOk => self.$next(cx),
+                    _ => self.done(cx),
+                }
+            } else {
+                let handler = unsafe { self.$name() };
+                self.fut_state = AsyncDispatchState::$phase(handler);
+                self.$do_resume(cx)
+            }
+        }
+
+        fn $do_resume(&mut self, cx: &mut Context<'_>) -> Poll<Ev::RetVal> {
+            if let AsyncDispatchState::$phase(future) = &mut self.fut_state {
+                self.is_poisoned = true;
+                let res = unsafe { Pin::new_unchecked(future) }.poll(cx);
+                self.is_poisoned = false;
+                match res {
+                    Poll::Ready(EvOk) => {
+                        self.fut_state = AsyncDispatchState::Errored;
+                        self.$next(cx)
+                    },
+                    Poll::Ready(_) => self.done(cx),
+                    Poll::Pending => Poll::Pending,
+                }
+            } else {
+                crate::private::event_error()
+            }
+        }
+    )*}
+}
+make_existentials! {
+    EvInitExistential EvCheckExistential
+    EvBeforeEventExistential EvOnEventExistential EvAfterEventExistential
+}
+enum AsyncDispatchState<'a, E: Events, Ev: Event + 'a> {
+    NeverRun, Done, Errored,
+    EvInit       (EvInitExistential       <'a, E, Ev>),
+    EvCheck      (EvCheckExistential      <'a, E, Ev>),
+    EvBeforeEvent(EvBeforeEventExistential<'a, E, Ev>),
+    EvOnEvent    (EvOnEventExistential    <'a, E, Ev>),
+    EvAfterEvent (EvAfterEventExistential <'a, E, Ev>),
+}
+struct AsyncDispatchFuture<'a, E: Events, Ev: Event + 'a> {
+    this: &'a Handler<E>,
+    ev: UnsafeCell<Ev>,
+    state: UnsafeCell<Option<Ev::State>>,
+    is_poisoned: bool,
+    fut_state: AsyncDispatchState<'a, E, Ev>,
+}
+impl <'a, E: Events, Ev: Event> AsyncDispatchFuture<'a, E, Ev> {
+    make_existential_fns! {
+        (on_init   EvInitExistential        EvInit        do_init   resume_init   do_check )
+        (on_check  EvCheckExistential       EvCheck       do_check  resume_check  do_before)
+        (on_before EvBeforeEventExistential EvBeforeEvent do_before resume_before do_event )
+        (on_event  EvOnEventExistential     EvOnEvent     do_event  resume_event  do_after )
+        (on_after  EvAfterEventExistential  EvAfterEvent  do_after  resume_after  done     )
+    }
+
+    fn done(&mut self, _: &mut Context<'_>) -> Poll<Ev::RetVal> {
+        self.fut_state = AsyncDispatchState::Done;
+        let ev = unsafe { &mut *self.ev.get() };
+        let state = unsafe { &mut *self.state.get() };
+        Poll::Ready(ev.to_return_value(self.this, state.take().unwrap()))
+    }
+}
+impl <'a, E: Events, Ev: Event> Future for AsyncDispatchFuture<'a, E, Ev> {
+    type Output = Ev::RetVal;
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let fut = unsafe { self.get_unchecked_mut() };
+        if fut.is_poisoned {
+            fut.fut_state = AsyncDispatchState::Errored;
+            fut.is_poisoned = false;
+        }
+
+        match fut.fut_state {
+            AsyncDispatchState::NeverRun         => fut.do_init(cx),
+            AsyncDispatchState::Done             => crate::private::async_already_done_error(),
+            AsyncDispatchState::Errored          => crate::private::async_panicked_error(),
+            AsyncDispatchState::EvInit       (_) => fut.resume_init(cx),
+            AsyncDispatchState::EvCheck      (_) => fut.resume_check(cx),
+            AsyncDispatchState::EvBeforeEvent(_) => fut.resume_before(cx),
+            AsyncDispatchState::EvOnEvent    (_) => fut.resume_event(cx),
+            AsyncDispatchState::EvAfterEvent (_) => fut.resume_after(cx),
+        }
+    }
+}
+
 #[repr(transparent)]
 /// A wrapper for [`Events`] that allows dispatching events into them.
 pub struct Handler<E: Events>(E);
@@ -118,38 +234,14 @@ impl <E: Events> Handler<E> {
     }
 
     #[inline(never)]
-    pub async fn dispatch_async<'a, Ev: Event + 'a>(&'a self, mut ev: Ev) -> Ev::RetVal {
-        let mut state = ev.starting_state(self);
-        'outer: loop {
-            macro_rules! do_phase {
-                ($phase:ident) => {
-                    if crate::private::is_implemented::<E, E, Ev, $phase, DefaultHandler>() {
-                        let result = if crate::private::is_async::<
-                            E, E, Ev, $phase, DefaultHandler,
-                        >() {
-                            await!(unsafe { crate::private::on_phase_async::<
-                                E, E, Ev, $phase, DefaultHandler,
-                            >(&self.0, self, &mut ev, &mut state) })
-                        } else {
-                            crate::private::on_phase::<E, E, Ev, $phase, DefaultHandler>(
-                                &self.0, self, &mut ev, &mut state
-                            )
-                        };
-                        match result {
-                            EventResult::EvOk | EventResult::EvCancelStage => { }
-                            EventResult::EvCancel => break 'outer,
-                        }
-                    }
-                }
-            }
-            do_phase!(EvInit);
-            do_phase!(EvCheck);
-            do_phase!(EvBeforeEvent);
-            do_phase!(EvOnEvent);
-            do_phase!(EvAfterEvent);
-            break 'outer
-        };
-        ev.to_return_value(self, state)
+    pub fn dispatch_async<'a, Ev: Event + 'a>(
+        &'a self, ev: Ev,
+    ) -> impl Future<Output = Ev::RetVal> + 'a {
+        let state = ev.starting_state(self);
+        AsyncDispatchFuture {
+            this: self, ev: UnsafeCell::new(ev), state: UnsafeCell::new(Some(state)),
+            is_poisoned: false, fut_state: AsyncDispatchState::NeverRun,
+        }
     }
 }
 

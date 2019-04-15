@@ -3,7 +3,7 @@
 use crate::events::*;
 use crate::handlers::*;
 use std::future::Future;
-use std::hint::unreachable_unchecked;
+use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Poll, Context};
 
@@ -14,8 +14,36 @@ use std::task::{Poll, Context};
 
 #[inline(never)]
 pub fn event_error() -> ! {
-    panic!("events interface error")
+    panic!("internal static-events error, this is likely a bug")
 }
+
+#[inline(never)]
+pub fn async_panicked_error() -> ! {
+    panic!("poll on panicked future")
+}
+
+#[inline(never)]
+pub fn async_already_done_error() -> ! {
+    panic!("poll on completed future")
+}
+
+pub struct FutureSyncnessWrapper<F: Future<Output = EventResult>, T>(F, PhantomData<(T, *mut ())>);
+impl <F: Future<Output = EventResult>, T> FutureSyncnessWrapper<F, T> {
+    #[inline(always)]
+    pub fn new(f: F) -> FutureSyncnessWrapper<F, T> {
+        FutureSyncnessWrapper(f, PhantomData)
+    }
+}
+impl <F: Future<Output = EventResult>, T> Future for FutureSyncnessWrapper<F, T> {
+    type Output = EventResult;
+    #[inline(always)]
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let internal = unsafe { self.map_unchecked_mut(|x| &mut x.0) };
+        internal.poll(cx)
+    }
+}
+unsafe impl <F: Future<Output = EventResult>, T> Send for FutureSyncnessWrapper<F, T>
+    where T: Send { }
 
 pub struct NullFuture(());
 impl Future for NullFuture {
@@ -27,7 +55,7 @@ impl Future for NullFuture {
     }
 }
 
-trait UniversalEventHandler<
+pub trait UniversalEventHandler<
     'a, E: Events, Ev: Event + 'a, P: EventPhase, D = DefaultHandler,
 >: Events {
     const IS_IMPLEMENTED: bool;

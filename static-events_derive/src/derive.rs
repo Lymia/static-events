@@ -56,47 +56,50 @@ fn to_vec<T, P>(punctuated: &Punctuated<T, P>) -> Vec<&T> {
 
 #[derive(Default)]
 struct DerivedImpl {
-    on_phase_body: SynTokenStream,
-    on_phase_async_body: SynTokenStream,
+    arms: Vec<CallGroup>,
     get_service_body: SynTokenStream,
-    is_implemented_expr: SynTokenStream,
-    is_async_expr: SynTokenStream,
 }
 impl DerivedImpl {
     fn generate_arm(&mut self, self_path: SynTokenStream, tp: ContainerType, fields: &[&Field]) {
         let mut matches = SynTokenStream::new();
-        let mut on_phase = SynTokenStream::new();
-        let mut on_phase_async = SynTokenStream::new();
         let mut get_service = SynTokenStream::new();
+        let mut stages = Vec::new();
         for (i, field) in fields.iter().enumerate() {
-            let attrs = FieldAttrs::from_attrs(&field.attrs);
             let field_ident = i_ident(i);
             let field_name = &field.ident;
-
             matches.extend(match tp {
                 ContainerType::Unit   => unimplemented!(),
                 ContainerType::Struct => quote!(#field_name: #field_ident,),
                 ContainerType::Tuple  => quote!(#field_ident,),
             });
-            if attrs.is_service {
-                get_service.extend(check_get_service_type(&field_ident));
-            }
-            if attrs.is_subhandler {
-                on_phase.extend(dispatch_on_phase(&field_ident, &field.ty, false, None));
-                on_phase_async.extend(dispatch_on_phase(&field_ident, &field.ty, true, None));
-                get_service.extend(dispatch_get_service(&field_ident));
-                self.is_implemented_expr.extend(is_implemented(&field.ty, None));
-                self.is_async_expr.extend(is_async(&field.ty, None));
-            }
         }
         let matches = match tp {
             ContainerType::Unit   => matches,
             ContainerType::Struct => quote! { { #matches } },
             ContainerType::Tuple  => quote! { ( #matches ) },
         };
-        self.on_phase_body      .extend(quote!(#self_path #matches => { #on_phase       }));
-        self.on_phase_async_body.extend(quote!(#self_path #matches => { #on_phase_async }));
-        self.get_service_body   .extend(quote!(#self_path #matches => { #get_service    }));
+        for (i, field) in fields.iter().enumerate() {
+            let attr = FieldAttrs::from_attrs(&field.attrs);
+            let field_ident = i_ident(i);
+
+            if attr.is_service {
+                get_service.extend(check_get_service_type(&field_ident));
+            }
+            if attr.is_subhandler {
+                get_service.extend(dispatch_get_service(&field_ident));
+                stages.push(CallStage::new(quote! {
+                    if let #self_path #matches = this {
+                        #field_ident
+                    } else {
+                        ::static_events::private::event_error()
+                    }
+                }, &field.ty, None));
+            }
+        }
+        self.arms.push(CallGroup::new(quote! {
+            if let #self_path #matches = this { true } else { false }
+        }, stages));
+        self.get_service_body.extend(quote!(#self_path #matches => { #get_service }));
     }
     fn generate_arm_fields(&mut self, self_path: SynTokenStream, fields: &Fields) {
         match fields {
@@ -126,44 +129,21 @@ impl DerivedImpl {
     }
 
     fn make_impl(self, ctx: &GensymContext, input: &DeriveInput) -> SynTokenStream {
-        let DerivedImpl {
-            on_phase_body, on_phase_async_body, get_service_body,
-            is_implemented_expr, is_async_expr,
-        } = self;
-        let attrs = FieldAttrs::from_attrs(&input.attrs);
-
-        let dist = Some(quote! { ::static_events::private::HandlerImplBlock });
-        let on_phase_self = dispatch_on_phase(quote!(self), quote!(Self), false, dist.clone());
-        let on_phase_async_self = dispatch_on_phase(quote!(self), quote!(Self), true, dist.clone());
-        let is_implemented_self = is_implemented(quote!(Self), dist.clone());
-        let is_async_self = is_async(quote!(Self), dist.clone());
-        let get_service_self = if attrs.is_service {
+        let get_service_self = if FieldAttrs::from_attrs(&input.attrs).is_service {
             check_get_service_type(quote!(self))
         } else {
             quote! { }
         };
+        let get_service_body = self.get_service_body;
 
         let name = &input.ident;
         let (impl_bounds, ty_param, where_bounds) = input.generics.split_for_impl();
-        let event_handler = make_universal_event_handler(
-            &ctx, EventHandlerTarget::Ident(name), &input.generics, None,
-            quote! {
-                false #is_implemented_self #is_implemented_expr
-            },
-            quote! {
-                false #is_async_self #is_async_expr
-            },
-            quote! {
-                #on_phase_self
-                match self { #on_phase_body }
-                ::static_events::EvOk
-            },
-            quote! {
-                #on_phase_async_self
-                match self { #on_phase_async_body }
-                ::static_events::EvOk
-            },
-        );
+
+        let mut common = Vec::new();
+        let dist = Some(quote! { ::static_events::private::HandlerImplBlock });
+        common.push(CallStage::new(quote! { this }, quote! { #name #ty_param }, dist));
+        let event_handler = make_merge_event_handler(&ctx, EventHandlerTarget::Ident(name),
+                                                     &input.generics, None, self.arms, common);
 
         let impl_name = ctx.gensym("DeriveWrapper");
         quote! {

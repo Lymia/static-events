@@ -369,12 +369,8 @@ fn create_normal_handler(
 fn create_impls(
     ctx: &GensymContext, self_ty: &Type, impl_generics: &Generics, methods: &[MethodInfo],
 ) -> SynTokenStream {
-    let mut is_implemented_expr = SynTokenStream::new();
-    let mut is_async_expr = SynTokenStream::new();
-    let mut on_phase = SynTokenStream::new();
-    let mut on_phase_async = SynTokenStream::new();
     let mut impls = SynTokenStream::new();
-
+    let mut stages = Vec::new();
     for (i, info) in methods.iter().enumerate() {
         match info {
             MethodInfo::EventHandler { phase, sig } => {
@@ -383,37 +379,15 @@ fn create_impls(
                 impls.extend(create_normal_handler(
                     ctx, self_ty, impl_generics, &phantom, phase, sig,
                 ));
-                is_implemented_expr.extend(
-                    is_implemented(self_ty, Some(quote! { #phantom })));
-                is_async_expr.extend(
-                    is_async(self_ty, Some(quote! { #phantom })));
-                on_phase.extend(
-                    dispatch_on_phase(quote!(self), self_ty, false, Some(quote! { #phantom })));
-                on_phase_async.extend(
-                    dispatch_on_phase(quote!(self), self_ty, true, Some(quote! { #phantom })));
+                stages.push(CallStage::new(quote!(this), self_ty, Some(quote!(#phantom))));
             }
         }
     }
-
+    let group = CallGroup::new(quote!(true), stages);
     let dist = Some(quote! { ::static_events::private::HandlerImplBlock });
-    let event_handler = make_universal_event_handler(
-        &ctx, EventHandlerTarget::Type(self_ty), impl_generics, dist,
-        quote! {
-            false #is_implemented_expr
-        },
-        quote! {
-            false #is_async_expr
-        },
-        quote! {
-            #on_phase
-            ::static_events::EvOk
-        },
-        quote! {
-            #on_phase_async
-            ::static_events::EvOk
-        },
-    );
-
+    let event_handler =
+        make_merge_event_handler(ctx, EventHandlerTarget::Type(self_ty), impl_generics, dist,
+                                 vec![group], Vec::new());
     let impl_name = ctx.gensym("ImplBlocksWrapper");
     quote! {
         #[allow(non_snake_case)]

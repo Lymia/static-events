@@ -19,6 +19,6 @@ std = ["parking_lot"]
 default = ["std"]
 
 [dependencies]
-futures-preview = { version = "0.3.0-alpha.13", git = "https://github.com/taiki-e/futures-rs.git", rev = "265ca12" }
+futures-preview = { version = "0.3.0-alpha.14", git = "https://github.com/rust-lang-nursery/futures-rs.git", rev = "845c71e" }
 parking_lot = { version = "0.6.3", optional = true }
 static-events_derive = { version = "0.1.0", path = "../static-events_derive" }
