@@ -119,6 +119,8 @@
 //! As all event handlers are passed around using immutable pointers, locking or cells must be
 //! used to store state in handlers.
 
+// TODO: Reevaluate all our unsafety and optimization hacks as rustc's async support improves.
+
 #[allow(unused_imports)] use std::fmt::Debug;
 
 pub use static_events_derive::*;

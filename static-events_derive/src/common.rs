@@ -81,36 +81,68 @@ pub fn stream_span(attr: TokenStream) -> Span {
 fn unwrap_distinguisher(distinguisher: Option<SynTokenStream>) -> SynTokenStream {
     distinguisher.unwrap_or(quote! {::static_events::handlers::DefaultHandler})
 }
-pub fn dispatch_on_phase(
-    field: impl ToTokens, tp: impl ToTokens, is_async: bool, distinguisher: Option<SynTokenStream>,
+fn make_call(
+    field: impl ToTokens, tp: impl ToTokens, is_async: bool, distinguisher: impl ToTokens,
 ) -> SynTokenStream {
-    let distinguisher = unwrap_distinguisher(distinguisher);
     let call_fn = if is_async { quote! { on_phase_async } } else { quote! { on_phase } };
     let call = quote! {
         ::static_events::private::#call_fn::<
             #tp, __EventDispatch, __EventType, __EventPhase, #distinguisher,
         >(#field, _target, _ev, _state)
     };
-    let call = if is_async { quote! { r#await!(unsafe { #call }) } } else { call };
-    quote! {{
-        if ::static_events::private::is_implemented::<
-            '__EventLifetime, #tp, __EventDispatch, __EventType, __EventPhase, #distinguisher,
-        >() {
-            let dispatch_result = #call;
-            match dispatch_result {
-                ::static_events::EvOk => { }
-                e => return e,
-            }
-        }
-    }}
+    if is_async { quote! { r#await!(unsafe { #call }) } } else { call }
 }
-pub fn is_implemented(tp: impl ToTokens, distinguisher: Option<SynTokenStream>) -> SynTokenStream {
+pub fn dispatch_on_phase(
+    field: impl ToTokens, tp: impl ToTokens, is_async: bool, distinguisher: Option<SynTokenStream>,
+) -> SynTokenStream {
+    let distinguisher = unwrap_distinguisher(distinguisher);
+    let check_args = quote! {
+        ::<'__EventLifetime, #tp, __EventDispatch, __EventType, __EventPhase, #distinguisher>
+    };
+    let match_result = quote! {
+        match dispatch_result {
+            ::static_events::EvOk => { }
+            e => return e,
+        }
+    };
+    if is_async {
+        let call_async = make_call(&field, &tp, true, &distinguisher);
+        let call_sync = make_call(&field, &tp, false, &distinguisher);
+        quote! {{
+            if ::static_events::private::is_implemented #check_args() {
+                let dispatch_result = if ::static_events::private::is_async #check_args() {
+                    #call_async
+                } else {
+                    #call_sync
+                };
+                #match_result
+            }
+        }}
+    } else {
+        let call = make_call(&field, &tp, false, &distinguisher);
+        quote! {{
+            if ::static_events::private::is_implemented #check_args() {
+                let dispatch_result = #call;
+                #match_result
+            }
+        }}
+    }
+}
+fn bool_val(
+    tp: impl ToTokens, distinguisher: Option<SynTokenStream>, call: impl ToTokens,
+) -> SynTokenStream {
     let distinguisher = unwrap_distinguisher(distinguisher);
     quote! {
-        || ::static_events::private::is_implemented::<
+        || ::static_events::private::#call::<
             '__EventLifetime, #tp, __EventDispatch, __EventType, __EventPhase, #distinguisher,
         >()
     }
+}
+pub fn is_implemented(tp: impl ToTokens, distinguisher: Option<SynTokenStream>) -> SynTokenStream {
+    bool_val(tp, distinguisher, quote! { is_implemented })
+}
+pub fn is_async(tp: impl ToTokens, distinguisher: Option<SynTokenStream>) -> SynTokenStream {
+    bool_val(tp, distinguisher, quote! { is_async })
 }
 
 pub enum EventHandlerTarget<'a> {
@@ -118,7 +150,8 @@ pub enum EventHandlerTarget<'a> {
 }
 pub fn make_universal_event_handler(
     ctx: &GensymContext, name: EventHandlerTarget, item_generics: &Generics,
-    distinguisher: Option<SynTokenStream>, is_implemented: SynTokenStream,
+    distinguisher: Option<SynTokenStream>,
+    is_implemented: SynTokenStream, is_async: SynTokenStream,
     on_phase_body: SynTokenStream, on_phase_async_body: SynTokenStream,
 ) -> SynTokenStream {
     let distinguisher = unwrap_distinguisher(distinguisher);
@@ -166,6 +199,7 @@ pub fn make_universal_event_handler(
             '__EventLifetime, __EventDispatch, __EventType, __EventPhase, #distinguisher,
         > for #name #handler_where_bounds {
             const IS_IMPLEMENTED: bool = #is_implemented;
+            const IS_ASYNC: bool = #is_async;
 
             #[inline(always)]
             fn on_phase(
@@ -180,13 +214,15 @@ pub fn make_universal_event_handler(
             type FutureType = #existential #handler_ty_param;
 
             #[inline(always)]
-            fn on_phase_async (
+            unsafe fn on_phase_async (
                 &'__EventLifetime self,
                 _target: &'__EventLifetime ::static_events::Handler<__EventDispatch>,
                 _ev: &'__EventLifetime mut __EventType,
                 _state: &'__EventLifetime mut __EventType::State,
             ) -> #existential #handler_ty_param {
-                self.#fn_async::<__EventDispatch, __EventType, __EventPhase>(_target, _ev, _state)
+                self.#fn_async::<__EventDispatch, __EventType, __EventPhase>(
+                    _target, _ev, _state
+                )
             }
         }
     }

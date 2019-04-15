@@ -10,23 +10,34 @@ use std::task::{Poll, Context};
 #[doc(hidden)] pub use futures::executor::block_on;
 #[doc(hidden)] pub use std::result::Result;
 
-struct NullFuture;
+// TODO: Make NullFuture uninhabited when rust #59972 is solved.
+
+#[inline(never)]
+pub fn event_error() -> ! {
+    panic!("events interface error")
+}
+
+pub struct NullFuture(());
 impl Future for NullFuture {
     type Output = EventResult;
+
+    #[inline(always)]
     fn poll(self: Pin<&mut Self>, _: &mut Context) -> Poll<Self::Output> {
-        unsafe { unreachable_unchecked() }
+        event_error()
     }
 }
+
 trait UniversalEventHandler<
     'a, E: Events, Ev: Event + 'a, P: EventPhase, D = DefaultHandler,
 >: Events {
     const IS_IMPLEMENTED: bool;
+    const IS_ASYNC: bool;
     fn on_phase(
         &'a self, target: &'a Handler<E>, ev: &'a mut Ev, state: &'a mut Ev::State,
     ) -> EventResult;
 
     type FutureType: Future<Output = EventResult>;
-    fn on_phase_async(
+    unsafe fn on_phase_async(
         &'a self, target: &'a Handler<E>, ev: &'a mut Ev, state: &'a mut Ev::State,
     ) -> Self::FutureType;
 }
@@ -34,36 +45,38 @@ impl <
     'a, E: Events, Ev: Event + 'a, P: EventPhase, D, T: Events,
 > UniversalEventHandler<'a, E, Ev, P, D> for T {
     default const IS_IMPLEMENTED: bool = false;
+    default const IS_ASYNC: bool = false;
 
+    #[inline(always)]
     default fn on_phase(
         &'a self, _: &'a Handler<E>, _: &'a mut Ev, _: &'a mut Ev::State,
     ) -> EventResult {
-        unsafe { unreachable_unchecked() }
+        event_error()
     }
 
     default type FutureType = NullFuture;
-    default fn on_phase_async(
+
+    #[inline(always)]
+    default unsafe fn on_phase_async(
         &'a self, _: &'a Handler<E>, _: &'a mut Ev, _: &'a mut Ev::State,
     ) -> Self::FutureType {
-        unsafe { unreachable_unchecked() }
+        event_error()
     }
 }
 impl <
     'a, E: Events, Ev: Event + 'a, P: EventPhase, D, T: Events + EventHandler<'a, E, Ev, P, D>,
 > UniversalEventHandler<'a, E, Ev, P, D> for T {
     const IS_IMPLEMENTED: bool = <Self as EventHandler<'a, E, Ev, P, D>>::IS_IMPLEMENTED;
-
+    const IS_ASYNC: bool = <Self as EventHandler<'a, E, Ev, P, D>>::IS_ASYNC;
     #[inline(always)]
     fn on_phase(
         &'a self, target: &'a Handler<E>, ev: &'a mut Ev, state: &'a mut Ev::State,
     ) -> EventResult {
         self.on_phase(target, ev, state)
     }
-
     type FutureType = <Self as EventHandler<'a, E, Ev, P, D>>::FutureType;
-
     #[inline(always)]
-    fn on_phase_async(
+    unsafe fn on_phase_async(
         &'a self, target: &'a Handler<E>, ev: &'a mut Ev, state: &'a mut Ev::State,
     ) -> Self::FutureType {
         <Self as EventHandler<'a, E, Ev, P, D>>::on_phase_async(self, target, ev, state)
@@ -73,6 +86,11 @@ impl <
 #[inline(always)]
 pub const fn is_implemented<'a, T: Events, E: Events, Ev: Event + 'a, P: EventPhase, D>() -> bool {
     <T as UniversalEventHandler<'a, E, Ev, P, D>>::IS_IMPLEMENTED
+}
+
+#[inline(always)]
+pub const fn is_async<'a, T: Events, E: Events, Ev: Event + 'a, P: EventPhase, D>() -> bool {
+    <T as UniversalEventHandler<'a, E, Ev, P, D>>::IS_ASYNC
 }
 
 #[inline(always)]
@@ -92,10 +110,10 @@ pub fn on_phase<
 pub unsafe fn on_phase_async<'a, T: Events, E: Events, Ev: Event + 'a, P: EventPhase + 'a, D: 'a>(
     this: &'a T, target: &'a Handler<E>, ev: &'a mut Ev, state: &'a mut Ev::State,
 ) -> impl Future<Output = EventResult> + 'a {
-    if is_implemented::<'a, T, E, Ev, P, D>() {
+    if is_implemented::<'a, T, E, Ev, P, D>() && is_async::<'a, T, E, Ev, P, D>() {
         <T as UniversalEventHandler<'a, E, Ev, P, D>>::on_phase_async(this, target, ev, state)
     } else {
-        unreachable_unchecked()
+        event_error()
     }
 }
 

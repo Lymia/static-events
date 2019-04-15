@@ -60,6 +60,7 @@ struct DerivedImpl {
     on_phase_async_body: SynTokenStream,
     get_service_body: SynTokenStream,
     is_implemented_expr: SynTokenStream,
+    is_async_expr: SynTokenStream,
 }
 impl DerivedImpl {
     fn generate_arm(&mut self, self_path: SynTokenStream, tp: ContainerType, fields: &[&Field]) {
@@ -85,6 +86,7 @@ impl DerivedImpl {
                 on_phase_async.extend(dispatch_on_phase(&field_ident, &field.ty, true, None));
                 get_service.extend(dispatch_get_service(&field_ident));
                 self.is_implemented_expr.extend(is_implemented(&field.ty, None));
+                self.is_async_expr.extend(is_async(&field.ty, None));
             }
         }
         let matches = match tp {
@@ -125,7 +127,8 @@ impl DerivedImpl {
 
     fn make_impl(self, ctx: &GensymContext, input: &DeriveInput) -> SynTokenStream {
         let DerivedImpl {
-            on_phase_body, on_phase_async_body, get_service_body, is_implemented_expr,
+            on_phase_body, on_phase_async_body, get_service_body,
+            is_implemented_expr, is_async_expr,
         } = self;
         let attrs = FieldAttrs::from_attrs(&input.attrs);
 
@@ -133,6 +136,7 @@ impl DerivedImpl {
         let on_phase_self = dispatch_on_phase(quote!(self), quote!(Self), false, dist.clone());
         let on_phase_async_self = dispatch_on_phase(quote!(self), quote!(Self), true, dist.clone());
         let is_implemented_self = is_implemented(quote!(Self), dist.clone());
+        let is_async_self = is_async(quote!(Self), dist.clone());
         let get_service_self = if attrs.is_service {
             check_get_service_type(quote!(self))
         } else {
@@ -145,6 +149,9 @@ impl DerivedImpl {
             &ctx, EventHandlerTarget::Ident(name), &input.generics, None,
             quote! {
                 false #is_implemented_self #is_implemented_expr
+            },
+            quote! {
+                false #is_async_self #is_async_expr
             },
             quote! {
                 #on_phase_self

@@ -40,6 +40,9 @@ pub trait Events: 'static + Sized {
 
 /// A trait that defines a phase of handling a particular event.
 ///
+/// This is not designed to be manually implemented, and is unsafe due to various internal
+/// optimizations done.
+///
 /// # Type parameters
 /// * `'a`: The lifetime the async portion of this event handler is linked to.
 /// * `E`: The type of event handler this event is being dispatched into.
@@ -47,10 +50,13 @@ pub trait Events: 'static + Sized {
 /// * `P`: The event phase this handler is for.
 /// * `D`: A distinguisher used internally by the `#[event_dispatch]` to allow overlapping event
 ///        handler implementations. This defaults to [`DefaultHandler`], which is what [`Handler`]
-///        actually invokes events with/
+///        actually invokes events with.
 pub trait EventHandler<'a, E: Events, Ev: Event + 'a, P: EventPhase, D = DefaultHandler>: Events {
     /// `true` if this `EventHandler` actually does anything. Used for optimizations.
     const IS_IMPLEMENTED: bool;
+
+    /// `true` if this `EventHandler` is asynchronous. Used for optimizations.
+    const IS_ASYNC: bool;
 
     /// Runs a phase of this event.
     fn on_phase(
@@ -61,7 +67,10 @@ pub trait EventHandler<'a, E: Events, Ev: Event + 'a, P: EventPhase, D = Default
     type FutureType: Future<Output = EventResult> + 'a;
 
     /// Runs a phase of this event asynchronously.
-    fn on_phase_async(
+    ///
+    /// This function may execute undefined behavior if it is called if `IS_IMPLEMENTED` or
+    /// `IS_ASYNC` are false.
+    unsafe fn on_phase_async(
         &'a self, target: &'a Handler<E>, ev: &'a mut Ev, state: &'a mut Ev::State,
     ) -> Self::FutureType;
 }
@@ -85,23 +94,26 @@ impl <E: Events> Handler<E> {
     #[inline(never)]
     pub fn dispatch<Ev: Event>(&self, mut ev: Ev) -> Ev::RetVal {
         let mut state = ev.starting_state(self);
-        macro_rules! do_phase {
-            ($phase:ident) => {
-                if crate::private::is_implemented::<E, E, Ev, $phase, DefaultHandler>() {
-                    match crate::private::on_phase::<E, E, Ev, $phase, DefaultHandler>(
-                        &self.0, self, &mut ev, &mut state
-                    ) {
-                        EventResult::EvOk | EventResult::EvCancelStage => { }
-                        EventResult::EvCancel => return ev.to_return_value(self, state),
+        'outer: loop {
+            macro_rules! do_phase {
+                ($phase:ident) => {
+                    if crate::private::is_implemented::<E, E, Ev, $phase, DefaultHandler>() {
+                        match crate::private::on_phase::<E, E, Ev, $phase, DefaultHandler>(
+                            &self.0, self, &mut ev, &mut state
+                        ) {
+                            EventResult::EvOk | EventResult::EvCancelStage => { }
+                            EventResult::EvCancel => break 'outer,
+                        }
                     }
                 }
             }
+            do_phase!(EvInit);
+            do_phase!(EvCheck);
+            do_phase!(EvBeforeEvent);
+            do_phase!(EvOnEvent);
+            do_phase!(EvAfterEvent);
+            break 'outer
         }
-        do_phase!(EvInit);
-        do_phase!(EvCheck);
-        do_phase!(EvBeforeEvent);
-        do_phase!(EvOnEvent);
-        do_phase!(EvAfterEvent);
         ev.to_return_value(self, state)
     }
 
@@ -112,11 +124,18 @@ impl <E: Events> Handler<E> {
             macro_rules! do_phase {
                 ($phase:ident) => {
                     if crate::private::is_implemented::<E, E, Ev, $phase, DefaultHandler>() {
-                        match await!(unsafe { crate::private::on_phase_async::<
+                        let result = if crate::private::is_async::<
                             E, E, Ev, $phase, DefaultHandler,
-                        >(
-                            &self.0, self, &mut ev, &mut state
-                        ) }) {
+                        >() {
+                            await!(unsafe { crate::private::on_phase_async::<
+                                E, E, Ev, $phase, DefaultHandler,
+                            >(&self.0, self, &mut ev, &mut state) })
+                        } else {
+                            crate::private::on_phase::<E, E, Ev, $phase, DefaultHandler>(
+                                &self.0, self, &mut ev, &mut state
+                            )
+                        };
+                        match result {
                             EventResult::EvOk | EventResult::EvCancelStage => { }
                             EventResult::EvCancel => break 'outer,
                         }

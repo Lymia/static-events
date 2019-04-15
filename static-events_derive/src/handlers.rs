@@ -294,41 +294,52 @@ fn create_normal_handler(
     let async_ty_params = async_generics_no_lifetimes.split_for_impl().1;
     let async_turbofish = async_ty_params.as_turbofish();
 
-    let (sync_body, async_body) = match sig.make_body() {
+    let (is_async, sync_body, future_ty, async_defs, async_body) = match sig.make_body() {
         EventHandlerBody::Sync(sync_body) => (
-            sync_body.clone(), sync_body,
+            false, sync_body,
+            quote! { ::static_events::private::NullFuture },
+            quote! { },
+            quote! { ::static_events::private::event_error() },
         ),
         EventHandlerBody::Async(async_body) => (
+            true,
             quote! {
                 ::static_events::private::block_on(
                     self.#fn_async #async_turbofish(_target, _ev, _state)
                 )
             },
-            async_body
+            quote! { #existential #handler_ty_param },
+            quote! {
+                impl #self_impl_bounds #self_ty #self_where_bounds {
+                    #[inline(always)]
+                    async fn #fn_async #async_bounds (
+                        &'__EventLifetime self,
+                        _target: &'__EventLifetime ::static_events::Handler<__EventDispatch>,
+                        _ev: &'__EventLifetime mut #event_ty,
+                        _state: &'__EventLifetime mut #event_ty_event::State,
+                    ) -> ::static_events::EventResult #async_where_bounds {
+                        let ev_result = (#async_body).into();
+                        _ev.to_event_result(_state, ev_result)
+                    }
+                }
+
+                existential type #existential #handler_generics:
+                    ::std::future::Future<Output = ::static_events::EventResult> + '__EventLifetime;
+            },
+            quote! {
+                self.#fn_async #async_turbofish(target, ev, state)
+            },
         ),
     };
 
     quote! {
-        impl #self_impl_bounds #self_ty #self_where_bounds {
-            #[inline(always)]
-            async fn #fn_async #async_bounds (
-                &'__EventLifetime self,
-                _target: &'__EventLifetime ::static_events::Handler<__EventDispatch>,
-                _ev: &'__EventLifetime mut #event_ty,
-                _state: &'__EventLifetime mut #event_ty_event::State,
-            ) -> ::static_events::EventResult #async_where_bounds {
-                let ev_result = (#async_body).into();
-                _ev.to_event_result(_state, ev_result)
-            }
-        }
-
-        existential type #existential #handler_generics:
-            ::std::future::Future<Output = ::static_events::EventResult> + '__EventLifetime;
+        #async_defs
 
         impl #handler_impl_bounds ::static_events::handlers::EventHandler<
             '__EventLifetime, __EventDispatch, #event_ty, #phase, #phantom,
         > for #self_ty #handler_where_bounds {
             const IS_IMPLEMENTED: bool = true;
+            const IS_ASYNC: bool = #is_async;
 
             #[inline(always)]
             fn on_phase(
@@ -341,16 +352,16 @@ fn create_normal_handler(
                 _ev.to_event_result(_state, ev_result)
             }
 
-            type FutureType = #existential #handler_ty_param;
+            type FutureType = #future_ty;
 
             #[inline(always)]
-            fn on_phase_async (
+            unsafe fn on_phase_async (
                 &'__EventLifetime self,
                 target: &'__EventLifetime ::static_events::Handler<__EventDispatch>,
                 ev: &'__EventLifetime mut #event_ty,
                 state: &'__EventLifetime mut #event_ty_event::State,
-            ) -> #existential #handler_ty_param {
-                self.#fn_async #async_turbofish(target, ev, state)
+            ) -> #future_ty {
+                #async_body
             }
         }
     }
@@ -359,6 +370,7 @@ fn create_impls(
     ctx: &GensymContext, self_ty: &Type, impl_generics: &Generics, methods: &[MethodInfo],
 ) -> SynTokenStream {
     let mut is_implemented_expr = SynTokenStream::new();
+    let mut is_async_expr = SynTokenStream::new();
     let mut on_phase = SynTokenStream::new();
     let mut on_phase_async = SynTokenStream::new();
     let mut impls = SynTokenStream::new();
@@ -373,6 +385,8 @@ fn create_impls(
                 ));
                 is_implemented_expr.extend(
                     is_implemented(self_ty, Some(quote! { #phantom })));
+                is_async_expr.extend(
+                    is_async(self_ty, Some(quote! { #phantom })));
                 on_phase.extend(
                     dispatch_on_phase(quote!(self), self_ty, false, Some(quote! { #phantom })));
                 on_phase_async.extend(
@@ -386,6 +400,9 @@ fn create_impls(
         &ctx, EventHandlerTarget::Type(self_ty), impl_generics, dist,
         quote! {
             false #is_implemented_expr
+        },
+        quote! {
+            false #is_async_expr
         },
         quote! {
             #on_phase
