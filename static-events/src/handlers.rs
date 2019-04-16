@@ -3,6 +3,7 @@
 use crate::events::*;
 use std::cell::UnsafeCell;
 use std::future::Future;
+use std::hint::unreachable_unchecked;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use crate::events::EventResult::EvOk;
@@ -112,7 +113,10 @@ macro_rules! make_existential_fns {
         }
 
         fn $do_resume(&mut self, cx: &mut Context<'_>) -> Poll<Ev::RetVal> {
-            if let AsyncDispatchState::$phase(future) = &mut self.fut_state {
+            if !crate::private::is_implemented::<'a, E, E, Ev, $phase, DefaultHandler>() ||
+               !crate::private::is_async::<'a, E, E, Ev, $phase, DefaultHandler>() {
+                unsafe { unreachable_unchecked() }
+            } if let AsyncDispatchState::$phase(future) = &mut self.fut_state {
                 self.is_poisoned = true;
                 let res = unsafe { Pin::new_unchecked(future) }.poll(cx);
                 self.is_poisoned = false;
@@ -125,7 +129,7 @@ macro_rules! make_existential_fns {
                     Poll::Pending => Poll::Pending,
                 }
             } else {
-                crate::private::event_error()
+                unsafe { unreachable_unchecked() }
             }
         }
     )*}
@@ -167,6 +171,7 @@ impl <'a, E: Events, Ev: Event> AsyncDispatchFuture<'a, E, Ev> {
 }
 impl <'a, E: Events, Ev: Event> Future for AsyncDispatchFuture<'a, E, Ev> {
     type Output = Ev::RetVal;
+
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let fut = unsafe { self.get_unchecked_mut() };
         if fut.is_poisoned {
@@ -203,7 +208,6 @@ impl <E: Events> Handler<E> {
         crate::private::CheckDowncast::<Handler<E2>>::downcast_ref(self)
     }
 
-    #[inline(never)]
     pub fn dispatch<Ev: Event>(&self, mut ev: Ev) -> Ev::RetVal {
         let mut state = ev.starting_state(self);
         'outer: loop {
@@ -229,7 +233,6 @@ impl <E: Events> Handler<E> {
         ev.to_return_value(self, state)
     }
 
-    #[inline(never)]
     pub fn dispatch_async<'a, Ev: Event + 'a>(
         &'a self, ev: Ev,
     ) -> impl Future<Output = Ev::RetVal> + 'a {

@@ -227,7 +227,6 @@ pub fn make_merge_event_handler(
             > };
 
             other_items.extend(quote! {
-                #[inline(always)]
                 fn #extract_fn #self_impl_bounds (this: &#name) -> &#field_tp #self_where_bounds {
                     #extract_field
                 }
@@ -242,12 +241,15 @@ pub fn make_merge_event_handler(
                 #variant_name(#existential_ty #handler_ty_param),
             });
             future_data_fns.extend(quote! {
-                #[inline(always)]
                 fn #resume_variant_fn(
                     &mut self, context: &mut ::std::task::Context<'_>,
                 ) -> ::std::task::Poll<::static_events::EventResult> {
                     use ::std::future::Future;
-                    if let #future_state::#variant_name(future) = &mut self.fut_state {
+
+                    if !::static_events::private::is_implemented #check_args() ||
+                       !::static_events::private::is_async #check_args() {
+                        unsafe { ::std::hint::unreachable_unchecked() }
+                    } else if let #future_state::#variant_name(future) = &mut self.fut_state {
                         self.is_poisoned = true;
                         let res = unsafe { ::std::pin::Pin::new_unchecked(future) }.poll(context);
                         self.is_poisoned = false;
@@ -263,18 +265,16 @@ pub fn make_merge_event_handler(
                             ::std::task::Poll::Pending => ::std::task::Poll::Pending,
                         }
                     } else {
-                        ::static_events::private::event_error()
+                        unsafe { ::std::hint::unreachable_unchecked() }
                     }
                 }
 
-                #[inline(always)]
                 fn #make_future(
                     &self, subhandler: &'__EventLifetime #field_tp,
                 ) -> #existential_ty #handler_ty_param {
                     #call_async
                 }
 
-                #[inline(always)]
                 fn #run_variant_fn(
                     &mut self, context: &mut ::std::task::Context<'_>,
                 ) -> ::std::task::Poll<::static_events::EventResult> {
@@ -327,7 +327,6 @@ pub fn make_merge_event_handler(
                 ident!("run_step_{}_0", group_i)
             };
             other_items.extend(quote! {
-                #[inline(always)]
                 fn #condition_fn #self_impl_bounds (this: &#name) -> bool {
                     #condition
                 }
@@ -371,14 +370,12 @@ pub fn make_merge_event_handler(
         impl #handler_impl_bounds #future_type #handler_ty_param #handler_where_bounds {
             #future_data_fns
 
-            #[inline(always)]
             fn do_selection(
                 &mut self, context: &mut ::std::task::Context<'_>,
             ) -> ::std::task::Poll<::static_events::EventResult> {
                 #future_init_matcher
             }
 
-            #[inline(always)]
             fn done(
                 &mut self, _context: &mut ::std::task::Context<'_>,
             ) -> ::std::task::Poll<::static_events::EventResult> {
@@ -390,7 +387,6 @@ pub fn make_merge_event_handler(
         {
             type Output = ::static_events::EventResult;
 
-            #[inline(always)]
             fn poll(
                 self: ::std::pin::Pin<&mut Self>, context: &mut ::std::task::Context<'_>,
             ) -> ::std::task::Poll<Self::Output> {
@@ -405,7 +401,7 @@ pub fn make_merge_event_handler(
                     Done => ::static_events::private::async_already_done_error(),
                     Errored => ::static_events::private::async_panicked_error(),
                     #future_resume_matcher
-                    _ => ::static_events::private::event_error(),
+                    _ => unsafe { ::std::hint::unreachable_unchecked() },
                 }
             }
         }
@@ -413,7 +409,7 @@ pub fn make_merge_event_handler(
             const IS_IMPLEMENTED: bool = #is_implemented_expr;
             const IS_ASYNC: bool = #is_async_expr;
 
-            #[inline(always)]
+            #[inline]
             fn on_phase(
                 &'__EventLifetime self,
                 _target: &'__EventLifetime ::static_events::Handler<__EventDispatch>,
@@ -435,7 +431,7 @@ pub fn make_merge_event_handler(
                 ),
             >;
 
-            #[inline(always)]
+            #[inline]
             fn on_phase_async (
                 &'__EventLifetime self,
                 target: &'__EventLifetime ::static_events::Handler<__EventDispatch>,

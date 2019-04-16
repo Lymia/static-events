@@ -57,6 +57,7 @@ fn to_vec<T, P>(punctuated: &Punctuated<T, P>) -> Vec<&T> {
 #[derive(Default)]
 struct DerivedImpl {
     arms: Vec<CallGroup>,
+    subhandlers_exist: bool,
     get_service_body: SynTokenStream,
 }
 impl DerivedImpl {
@@ -91,9 +92,10 @@ impl DerivedImpl {
                     if let #self_path #matches = this {
                         #field_ident
                     } else {
-                        ::static_events::private::event_error()
+                        unsafe { ::std::hint::unreachable_unchecked() }
                     }
                 }, &field.ty, None));
+                self.subhandlers_exist = true;
             }
         }
         self.arms.push(CallGroup::new(quote! {
@@ -139,11 +141,68 @@ impl DerivedImpl {
         let name = &input.ident;
         let (impl_bounds, ty_param, where_bounds) = input.generics.split_for_impl();
 
-        let mut common = Vec::new();
         let dist = Some(quote! { ::static_events::private::HandlerImplBlock });
-        common.push(CallStage::new(quote! { this }, quote! { #name #ty_param }, dist));
-        let event_handler = make_merge_event_handler(&ctx, EventHandlerTarget::Ident(name),
-                                                     &input.generics, None, self.arms, common);
+        let event_handler = if self.subhandlers_exist {
+            let mut common = Vec::new();
+            common.push(CallStage::new(quote! { this }, quote! { #name #ty_param }, dist));
+            make_merge_event_handler(&ctx, EventHandlerTarget::Ident(name),
+                                     &input.generics, None, self.arms, common)
+        } else {
+            let event_generics_raw = quote! {
+                '__EventLifetime,
+                __EventDispatch: ::static_events::Events,
+                __EventType: ::static_events::Event + '__EventLifetime,
+                __EventPhase: ::static_events::handlers::EventPhase + '__EventLifetime,
+            };
+            let event_generics = generics(&event_generics_raw);
+            let handler_generics = merge_generics(&event_generics, &input.generics);
+            let (handler_impl_bounds, handler_ty_param, handler_where_bounds) =
+                handler_generics.split_for_impl();
+
+            let is_implemented_expr = is_implemented(quote!(Self), dist.clone());
+            let is_async_expr = is_async(quote!(Self), dist.clone());
+
+            let existential_ty = ctx.gensym("ExistentialFuture");
+            quote! {
+                existential type #existential_ty #handler_impl_bounds #handler_where_bounds:
+                    ::std::future::Future<Output = ::static_events::EventResult> +
+                    '__EventLifetime;
+                impl #handler_impl_bounds ::static_events::handlers::EventHandler<
+                    '__EventLifetime, __EventDispatch, __EventType, __EventPhase,
+                > for #name #handler_where_bounds {
+                    const IS_IMPLEMENTED: bool = false #is_implemented_expr;
+                    const IS_ASYNC: bool = false #is_async_expr;
+
+                    #[inline]
+                    fn on_phase(
+                        &'__EventLifetime self,
+                        target: &'__EventLifetime ::static_events::Handler<__EventDispatch>,
+                        ev: &'__EventLifetime mut __EventType,
+                        state: &'__EventLifetime mut __EventType::State,
+                    ) -> ::static_events::EventResult {
+                        ::static_events::private::on_phase::<
+                            Self, __EventDispatch, __EventType, __EventPhase,
+                            ::static_events::private::HandlerImplBlock,
+                        >(self, target, ev, state)
+                    }
+
+                    type FutureType = #existential_ty #handler_ty_param;
+
+                    #[inline]
+                    fn on_phase_async (
+                        &'__EventLifetime self,
+                        target: &'__EventLifetime ::static_events::Handler<__EventDispatch>,
+                        ev: &'__EventLifetime mut __EventType,
+                        state: &'__EventLifetime mut __EventType::State,
+                    ) -> #existential_ty #handler_ty_param {
+                        ::static_events::private::on_phase_async::<
+                            '__EventLifetime, Self, __EventDispatch, __EventType, __EventPhase,
+                            ::static_events::private::HandlerImplBlock,
+                        >(self, target, ev, state)
+                    }
+                }
+            }
+        };
 
         let impl_name = ctx.gensym("DeriveWrapper");
         quote! {

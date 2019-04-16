@@ -259,10 +259,11 @@ impl MethodInfo {
 }
 
 fn create_normal_handler(
-    ctx: &GensymContext, self_ty: &Type, impl_generics: &Generics, phantom: &Ident,
+    ctx: &GensymContext, self_ty: &Type, impl_generics: &Generics, phantom: SynTokenStream,
     phase: &SynTokenStream, sig: &HandlerSig,
 ) -> SynTokenStream {
-    let ctx = ctx.derive(phantom);
+    let phantom = phantom.into_token_stream();
+    let ctx = ctx.derive(&phantom);
 
     let fn_async = ctx.gensym("async_handler");
     let existential = ctx.gensym("FutureTypeExistential");
@@ -311,7 +312,6 @@ fn create_normal_handler(
             quote! { #existential #handler_ty_param },
             quote! {
                 impl #self_impl_bounds #self_ty #self_where_bounds {
-                    #[inline(always)]
                     async fn #fn_async #async_bounds (
                         &'__EventLifetime self,
                         _target: &'__EventLifetime ::static_events::Handler<__EventDispatch>,
@@ -341,7 +341,7 @@ fn create_normal_handler(
             const IS_IMPLEMENTED: bool = true;
             const IS_ASYNC: bool = #is_async;
 
-            #[inline(always)]
+            #[inline]
             fn on_phase(
                 &'__EventLifetime self,
                 _target: &'__EventLifetime ::static_events::Handler<__EventDispatch>,
@@ -354,7 +354,7 @@ fn create_normal_handler(
 
             type FutureType = #future_ty;
 
-            #[inline(always)]
+            #[inline]
             fn on_phase_async (
                 &'__EventLifetime self,
                 target: &'__EventLifetime ::static_events::Handler<__EventDispatch>,
@@ -369,31 +369,43 @@ fn create_normal_handler(
 fn create_impls(
     ctx: &GensymContext, self_ty: &Type, impl_generics: &Generics, methods: &[MethodInfo],
 ) -> SynTokenStream {
+    let dist = quote! { ::static_events::private::HandlerImplBlock };
+
     let mut impls = SynTokenStream::new();
     let mut stages = Vec::new();
+    let mut phantoms = Vec::new();
+
     for (i, info) in methods.iter().enumerate() {
         match info {
             MethodInfo::EventHandler { phase, sig } => {
                 let phantom = ctx.gensym_id("PhantomMarker", i);
-                impls.extend(quote! { enum #phantom { } });
                 impls.extend(create_normal_handler(
-                    ctx, self_ty, impl_generics, &phantom, phase, sig,
+                    ctx, self_ty, impl_generics, quote!(#phantom), phase, sig,
                 ));
                 stages.push(CallStage::new(quote!(this), self_ty, Some(quote!(#phantom))));
+                phantoms.push(phantom);
             }
         }
     }
     let group = CallGroup::new(quote!(true), stages);
-    let dist = Some(quote! { ::static_events::private::HandlerImplBlock });
-    let event_handler =
-        make_merge_event_handler(ctx, EventHandlerTarget::Type(self_ty), impl_generics, dist,
-                                 vec![group], Vec::new());
+    if phantoms.len() == 1 {
+        let phantom = phantoms.pop().unwrap();
+        impls.extend(quote! { type #phantom = #dist; });
+    } else if phantoms.len() > 1 {
+        for phantom in phantoms {
+            impls.extend(quote! { enum #phantom { } });
+        }
+        impls.extend(
+            make_merge_event_handler(ctx, EventHandlerTarget::Type(self_ty), impl_generics,
+                                     Some(dist), vec![group], Vec::new())
+        );
+    }
+
     let impl_name = ctx.gensym("ImplBlocksWrapper");
     quote! {
         #[allow(non_snake_case)]
         const #impl_name: () = {
             #impls
-            #event_handler
             ()
         };
     }

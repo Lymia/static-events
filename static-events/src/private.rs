@@ -13,16 +13,19 @@ use std::task::{Poll, Context};
 // TODO: Make NullFuture uninhabited when rust #59972 is solved.
 
 #[inline(never)]
+#[cold]
 pub fn event_error() -> ! {
     panic!("internal static-events error, this is likely a bug")
 }
 
 #[inline(never)]
+#[cold]
 pub fn async_panicked_error() -> ! {
     panic!("poll on panicked future")
 }
 
 #[inline(never)]
+#[cold]
 pub fn async_already_done_error() -> ! {
     panic!("poll on completed future")
 }
@@ -74,16 +77,13 @@ impl <
 > UniversalEventHandler<'a, E, Ev, P, D> for T {
     default const IS_IMPLEMENTED: bool = false;
     default const IS_ASYNC: bool = false;
-
     #[inline(always)]
     default fn on_phase(
         &'a self, _: &'a Handler<E>, _: &'a mut Ev, _: &'a mut Ev::State,
     ) -> EventResult {
         event_error()
     }
-
     default type FutureType = NullFuture;
-
     #[inline(always)]
     default fn on_phase_async(
         &'a self, _: &'a Handler<E>, _: &'a mut Ev, _: &'a mut Ev::State,
