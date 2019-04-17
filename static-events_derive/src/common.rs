@@ -9,6 +9,7 @@ macro_rules! ident {
     ($($tts:tt)*) => { Ident::new(&format!($($tts)*), SynSpan::call_site()) }
 }
 
+/// Helps create unique identifier names for various derives.
 pub struct GensymContext(String, String);
 impl GensymContext {
     pub fn new(target: impl Display) -> GensymContext {
@@ -36,6 +37,8 @@ pub fn last_path_segment(path: &Path) -> String {
 pub fn generics(a: impl ToTokens) -> Generics {
     parse2::<Generics>(quote! { < #a > }).unwrap()
 }
+
+/// Common function for processing generics.
 fn process_generics(list: &[&Generics], skip_lifetimes: bool) -> Generics {
     let mut toks = SynTokenStream::new();
     if !skip_lifetimes {
@@ -67,13 +70,18 @@ fn process_generics(list: &[&Generics], skip_lifetimes: bool) -> Generics {
     }
     generics
 }
+
+/// Merges two sets of generics into one.
 pub fn merge_generics(a: &Generics, b: &Generics) -> Generics {
     process_generics(&[a, b], false)
 }
+
+/// Strips lifetimes from a set of generics.
 pub fn strip_lifetimes(a: &Generics) -> Generics {
     process_generics(&[a], true)
 }
 
+/// Creates a span for an entire TokenStream.
 pub fn stream_span(attr: TokenStream) -> Span {
     let head_span = attr.clone().into_iter().next().unwrap().span();
     let tail_span = attr.into_iter().last().unwrap().span();
@@ -95,13 +103,17 @@ fn bool_val(
         >()
     }
 }
+
+/// Generates `|| (...)::IS_IMPLEMENTED`
 pub fn is_implemented(tp: impl ToTokens, distinguisher: impl ToTokens) -> SynTokenStream {
     bool_val(tp, distinguisher, quote! { is_implemented })
 }
+/// Generates `|| (...)::IS_ASYNC`
 pub fn is_async(tp: impl ToTokens, distinguisher: impl ToTokens) -> SynTokenStream {
     bool_val(tp, distinguisher, quote! { is_async })
 }
 
+/// A particular call to make during an event dispatch.
 pub struct CallStage {
     extract_field: SynTokenStream, field_tp: SynTokenStream, distinguisher: SynTokenStream,
 }
@@ -118,6 +130,7 @@ impl CallStage {
     }
 }
 
+/// A particular arm of an event dispatch (e.g. if the Events is implemented on an enum).
 pub struct CallGroup {
     is_synthetic: bool, condition: SynTokenStream, stages: Vec<CallStage>,
 }

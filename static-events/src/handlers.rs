@@ -6,7 +6,6 @@ use std::future::Future;
 use std::hint::unreachable_unchecked;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use crate::events::EventResult::EvOk;
 
 pub(crate) mod private {
     pub trait Sealed { }
@@ -46,11 +45,11 @@ pub trait Events: 'static + Sized {
 /// A trait that defines a phase of handling a particular event.
 ///
 /// # Type parameters
-/// * `'a`: The lifetime the async portion of this event handler is linked to.
+/// * `'a`: The lifetime this event handler is for.
 /// * `E`: The type of event handler this event is being dispatched into.
 /// * `Ev`: The event this handler is for.
 /// * `P`: The event phase this handler is for.
-/// * `D`: A distinguisher used internally by the `#[event_dispatch]` to allow overlapping event
+/// * `D`: A phantom type used internally by the `#[events_impl]` macro to allow overlapping event
 ///        handler implementations. This defaults to [`DefaultHandler`], which is what [`Handler`]
 ///        actually invokes events with.
 pub trait EventHandler<'a, E: Events, Ev: Event + 'a, P: EventPhase, D = DefaultHandler>: Events {
@@ -65,12 +64,12 @@ pub trait EventHandler<'a, E: Events, Ev: Event + 'a, P: EventPhase, D = Default
         &'a self, target: &'a Handler<E>, ev: &'a mut Ev, state: &'a mut Ev::State,
     ) -> EventResult;
 
-    /// The type of the future used by this event handler.
+    /// The type of the future returned by `on_phase_async`.
     type FutureType: Future<Output = EventResult> + 'a;
 
     /// Runs a phase of this event asynchronously.
     ///
-    /// This function should only be called if `IS_IMPLEMENTED` or `IS_ASYNC` are false.
+    /// This function should only be called if `IS_IMPLEMENTED` and `IS_ASYNC` are `true`.
     fn on_phase_async(
         &'a self, target: &'a Handler<E>, ev: &'a mut Ev, state: &'a mut Ev::State,
     ) -> Self::FutureType;
@@ -78,11 +77,16 @@ pub trait EventHandler<'a, E: Events, Ev: Event + 'a, P: EventPhase, D = Default
 
 macro_rules! make_existentials {
     ($($id:ident)*) => {$(
+        #[cfg(rustdoc)]
+        type $id<'a, E, Ev> = ::std::marker::PhantomData<(&'a E, &'a Ev)>;
+
+        #[cfg(not(rustdoc))]
         existential type $id<'a, E: Events, Ev: Event>: Future<Output = EventResult> + 'a;
     )*}
 }
 macro_rules! make_existential_fns {
     ($(($name:ident $id:ident $phase:ident $do_phase:ident $do_resume:ident $next:ident))*) => {$(
+        /// This is extracted into a function to set the existential type properly.
         unsafe fn $name(&self) -> $id<'a, E, Ev> {
             crate::private::on_phase_async::<'a, E, E, Ev, $phase, DefaultHandler>(
                 &self.this.0, &self.this,
@@ -90,28 +94,8 @@ macro_rules! make_existential_fns {
             )
         }
 
-        fn $do_phase(&mut self, cx: &mut Context<'_>) -> Poll<Ev::RetVal> {
-            self.fut_state = AsyncDispatchState::Errored;
-            if !crate::private::is_implemented::<'a, E, E, Ev, $phase, DefaultHandler>() {
-                self.$next(cx)
-            } else if !crate::private::is_async::<'a, E, E, Ev, $phase, DefaultHandler>() {
-                let result = unsafe {
-                    crate::private::on_phase::<E, E, Ev, $phase, DefaultHandler>(
-                        &self.this.0, &self.this,
-                        &mut *self.ev.get(), (&mut *self.state.get()).as_mut().unwrap(),
-                    )
-                };
-                match result {
-                    EvOk => self.$next(cx),
-                    _ => self.done(cx),
-                }
-            } else {
-                let handler = unsafe { self.$name() };
-                self.fut_state = AsyncDispatchState::$phase(handler);
-                self.$do_resume(cx)
-            }
-        }
-
+        /// Resumes a future suspended due to a phase yielding.
+        /// This assumes the phase is initialized, is defined asynchronously,
         fn $do_resume(&mut self, cx: &mut Context<'_>) -> Poll<Ev::RetVal> {
             if !crate::private::is_implemented::<'a, E, E, Ev, $phase, DefaultHandler>() ||
                !crate::private::is_async::<'a, E, E, Ev, $phase, DefaultHandler>() {
@@ -121,7 +105,7 @@ macro_rules! make_existential_fns {
                 let res = unsafe { Pin::new_unchecked(future) }.poll(cx);
                 self.is_poisoned = false;
                 match res {
-                    Poll::Ready(EvOk) => {
+                    Poll::Ready(EventResult::EvOk) | Poll::Ready(EventResult::EvCancelStage) => {
                         self.fut_state = AsyncDispatchState::Errored;
                         self.$next(cx)
                     },
@@ -130,6 +114,31 @@ macro_rules! make_existential_fns {
                 }
             } else {
                 unsafe { unreachable_unchecked() }
+            }
+        }
+
+        fn $do_phase(&mut self, cx: &mut Context<'_>) -> Poll<Ev::RetVal> {
+            self.fut_state = AsyncDispatchState::Errored;
+            if !crate::private::is_implemented::<'a, E, E, Ev, $phase, DefaultHandler>() {
+                // Skip undefined phases
+                self.$next(cx)
+            } else if !crate::private::is_async::<'a, E, E, Ev, $phase, DefaultHandler>() {
+                // Run phases defined as non-async directly
+                let result = unsafe {
+                    crate::private::on_phase::<E, E, Ev, $phase, DefaultHandler>(
+                        &self.this.0, &self.this,
+                        &mut *self.ev.get(), (&mut *self.state.get()).as_mut().unwrap(),
+                    )
+                };
+                match result {
+                    EventResult::EvOk | EventResult::EvCancelStage => self.$next(cx),
+                    _ => self.done(cx),
+                }
+            } else {
+                // Set up the phase for asynchronous execution
+                let handler = unsafe { self.$name() };
+                self.fut_state = AsyncDispatchState::$phase(handler);
+                self.$do_resume(cx)
             }
         }
     )*}
@@ -196,18 +205,38 @@ impl <'a, E: Events, Ev: Event> Future for AsyncDispatchFuture<'a, E, Ev> {
 /// A wrapper for [`Events`] that allows dispatching events into them.
 pub struct Handler<E: Events>(E);
 impl <E: Events> Handler<E> {
+    /// Wraps an [`Events`] to allow dispatching events into it.
     pub fn new(e: E) -> Self {
         Handler(e)
     }
 
+    /// Retrieves a service from an [`Events`].
+    ///
+    /// # Example
+    /// ```
+    /// # #![feature(existential_type, futures_api, async_await, await_macro)]
+    /// # use static_events::*;
+    /// #[derive(Eq, PartialEq, Debug)]
+    /// struct TestService;
+    ///
+    /// #[derive(Events)]
+    /// struct EventHandler(#[service] TestService);
+    ///
+    /// let handler = Handler::new(EventHandler(TestService));
+    /// assert_eq!(handler.get_service::<TestService>(), Some(&TestService));
+    /// ```
     pub fn get_service<S>(&self) -> Option<&S> {
         self.0.get_service()
     }
 
+    /// Downcasts this handler into a particular concrete handler type.
     pub fn downcast_ref<E2: Events>(&self) -> Option<&Handler<E2>> {
         crate::private::CheckDowncast::<Handler<E2>>::downcast_ref(self)
     }
 
+    /// Dispatches an event synchronously.
+    ///
+    /// Any asynchronous event handlers are polled until completion.
     pub fn dispatch<Ev: Event>(&self, mut ev: Ev) -> Ev::RetVal {
         let mut state = ev.starting_state(self);
         'outer: loop {
@@ -233,6 +262,9 @@ impl <E: Events> Handler<E> {
         ev.to_return_value(self, state)
     }
 
+    /// Dispatches an event asynchronously.
+    ///
+    /// Any synchronous events are run immediately as part of the [`Future::poll`] execution.
     pub fn dispatch_async<'a, Ev: Event + 'a>(
         &'a self, ev: Ev,
     ) -> impl Future<Output = Ev::RetVal> + 'a {

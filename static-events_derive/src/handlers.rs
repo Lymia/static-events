@@ -169,7 +169,7 @@ impl HandlerSig {
             None    => quote! {},
         };
         let state = match self.state_param {
-            Some(_) => quote! { _state, },
+            Some(_) => quote! { _ev.borrow_state(_state), },
             None    => quote! {},
         };
         let call = quote! { #call (#target _ev, #state) };

@@ -1,27 +1,33 @@
-#![feature(const_fn, nll, specialization, futures_api, async_await, await_macro, gen_future)]
-#![feature(existential_type)]
+#![feature(const_fn, nll, specialization, futures_api, async_await, await_macro)]
+#![feature(existential_type, doc_cfg)]
 
 // TODO: Implement filtering of some kind on events, and state between phases.
 // TODO: Reevaluate all our unsafety and optimization hacks as rustc's async support improves.
+// TODO: Document how to set the phase of an event handler.
 
-//! A generic zero-cost event handler system. Event dispatches should get compiled down to a
-//! plain function that executes all handlers involved with no dynamic dispatches.
+//! A generic zero-cost event handler system built on compile-time magic.
 //!
-//! This crate relies on specialization, and can only be used on nightly versions of Rust.
+//! Synchronous event dispatches should get compiled down to a plain function that executes all
+//! handlers involved with no dynamic dispatches. Asynchrnous event dispatches should be
+//! similarily compile down to a relatively optimized future
+//!
+//! This crate relies on many unstable features, and can only be used on nightly versions of Rust.
+//! It currently requires the following features:
+//!
+//! ```
+//! #![feature(existential_type, futures_api, async_await, await_macro)]
+//! ```
 //!
 //! # Basic model
 //!
-//! Events can be any type that implements [`Event`], and the type itself is used to distinguish
-//! different kinds of events. For detailed information on defining events, see the [`events`]
-//! module.
+//! Events handlers can be any type that implements [`Event`], and the type of the event itself
+//! is used to distinguish different kinds of events. For detailed information on defining events,
+//! see the [`events`] module. These handlers are wrapped in a [`Handler`] to allow events to be
+//! dispatched into them.
 //!
-//! [`EventDispatch`]s receive events, and eventually dispatch them to event handler functions.
-//! This trait is primarily implemented via the `#[event_dispatch]` attribute on an `impl` block.
-//! This implementation will call methods in the `impl` block marked with `#[event_dispatch]` in
-//! response to a matching event type.
-//!
-//! [`EventDispatch`]s can also be merged via `#[derive(EventDispatch)]`, Events will be
-//! dispatched in order to each field in the `struct` or `enum` the attribute is added to.
+//! [`Events`] is implemented using `#[derive(Events)]`. This can be paired with an `impl` block
+//! marked with an `#[events_impl]` annotation, which is used to actually defined the handlers
+//! used by the event handler.
 //!
 //! # Event dispatch
 //!
@@ -30,27 +36,20 @@
 //!
 //! Event dispatch proceeds in multiple phases, each of which can have its own each event handlers
 //! attached to them:
-//! [`EvInit`] -> [`EvCheck`], [`EvBeforeEvent`], [`EvOnEvent`], and [`EvAfterEvent`]
+//! [`EvInit`], [`EvCheck`], [`EvBeforeEvent`], [`EvOnEvent`], and [`EvAfterEvent`]
 //!
-//! Event handlers take both themselves and the current state as mutable borrows, and return a
-//! status value controlling the rest of the event dispatch:
-//! * [`EvOk`] continues the event dispatch as normal.
-//! * [`EvCancelStage`] prevents the execution of the currently executing phase any further
-//!   event handlers.
-//! * [`EvCancel`] immediately stops the event dispatch, proceeding to the calculation of the
-//!   return value.
-//!
-//! Note that this behavior is heavily customizable by particular [`Event`] implementations, and
-//! can be significantly different from event to event.
+//! The exact signature of the functions event handlers are built up of are defined by the
+//! particular [`Event`] trait implementation for the event in question.
 //!
 //! # Defining event handlers
 //!
-//! Event handlers are defined using the `#[event_dispatch]` annotation on an impl block. This
-//! automatically creates an implementation of [`EventDispatch`] based on methods annotated
-//! with `#[event_handler]` inside it.
+//! Event handlers are defined by adding an `#[derive(Events)]` annotation. The event handlers's
+//! response to various events is defined inside an impl block marked with `#[events_impl]`.
+//! Any function in such an impl block marked with `#[event_handler]` will be called when an
+//! event of an approprate type is passed into the corresponding [`Events`].
 //!
 //! These methods have parameters in the following order: a `&self` parameter, an
-//! `&impl EventDispatch` parameter, a mutable borrow of the event value, and a mutable
+//! `&Handler<impl Events>` parameter, a mutable borrow of the event value, and a mutable
 //! borrow of the event dispatch state.
 //!
 //! (e.g. `&self, target: &impl EventDispatch, ev: &mut MyEvent, state: &mut MyEventState`)
@@ -60,14 +59,15 @@
 //!
 //! Example:
 //! ```
+//! # #![feature(existential_type, futures_api, async_await, await_macro)]
 //! # use static_events::*;
 //! struct MyEvent(u32);
 //! simple_event!(MyEvent, u32, 0);
 //!
-//! #[derive(Default)]
+//! #[derive(Events, Default)]
 //! struct MyEventHandler;
 //!
-//! #[event_dispatch]
+//! #[events_impl]
 //! impl MyEventHandler {
 //!     #[event_handler]
 //!     fn handle_event(ev: &MyEvent, i: &mut u32) {
@@ -75,29 +75,26 @@
 //!     }
 //! }
 //!
-//! assert_eq!(MyEventHandler.dispatch(MyEvent(42)), 42);
+//! let handler = Handler::new(MyEventHandler);
+//! assert_eq!(handler.dispatch(MyEvent(42)), 42);
 //! ```
 //!
-//! Multiple event handlers may be merged using `#[derive(RawEventDispatch)]`:
+//! Fields inside the [`Events`] can be marked with `#[subhandler]` to cause any events to be
+//! passed on to another event handler:
 //! ```
+//! # #![feature(existential_type, futures_api, async_await, await_macro)]
 //! # use static_events::*;
-//! # struct MyEvent(u32);
-//! # simple_event!(MyEvent, u32, 0);
-//! #
-//! # // From previous example
-//! # #[derive(Default)]
-//! # struct MyEventHandler;
-//! # #[event_dispatch]
-//! # impl MyEventHandler {
-//! #     #[event_handler]
-//! #     fn handle_event(ev: &MyEvent, i: &mut u32) {
+//! # struct MyEvent(u32); simple_event!(MyEvent, u32, 0);
+//! # #[derive(Events, Default)] struct MyEventHandler;
+//! # #[events_impl] impl MyEventHandler {
+//! #     #[event_handler] fn handle_event(ev: &MyEvent, i: &mut u32) {
 //! #         *i += ev.0;
 //! #     }
 //! # }
-//! #[derive(Default)]
+//! #[derive(Events, Default)]
 //! struct MyOtherEventHandler;
 //!
-//! #[event_dispatch]
+//! #[events_impl]
 //! impl MyOtherEventHandler {
 //!     #[event_handler]
 //!     fn handle_event(ev: &MyEvent, i: &mut u32) {
@@ -105,12 +102,14 @@
 //!     }
 //! }
 //!
-//! #[derive(Default, EventDispatch)]
+//! #[derive(Events, Default)]
 //! struct SquaringEventHandler {
-//!     evh_a: MyEventHandler, evh_b: MyOtherEventHandler,
+//!     #[subhandler] evh_a: MyEventHandler,
+//!     #[subhandler] evh_b: MyOtherEventHandler,
 //! }
 //!
-//! assert_eq!(SquaringEventHandler::default().dispatch(MyEvent(9)), 81);
+//! let handler = Handler::new(SquaringEventHandler::default());
+//! assert_eq!(handler.dispatch(MyEvent(9)), 81);
 //! ```
 //!
 //! # Limitations
@@ -118,10 +117,8 @@
 //! A fundamental limitation to this approach is that event handlers cannot be dynamically added
 //! or removed at runtime, and sets of handlers can only be defined at compile-time.
 //!
-//! As all event handlers are passed around using immutable pointers, locking or cells must be
-//! used to store state in handlers.
-
-#[allow(unused_imports)] use std::fmt::Debug;
+//! As event handlers are passed around using immutable pointers, locking or cells must be used to
+//! store state.
 
 pub use static_events_derive::{Events, events_impl, event_handler};
 
@@ -135,6 +132,10 @@ pub use crate::events::{Event, EventResult};
 pub use crate::events::EventResult::*;
 pub use crate::handlers::{Events, Handler};
 pub use crate::handlers::{EvInit, EvCheck, EvBeforeEvent, EvOnEvent, EvAfterEvent};
+
+// Fixes for documentation.
+#[allow(unused_imports)] use std::fmt::Debug;
+#[allow(unused_imports)] use events::*;
 
 #[doc(hidden)]
 /// This module is used by static-events_derive, and is not stable API.

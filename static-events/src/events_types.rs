@@ -26,23 +26,28 @@
 /// pub struct MyEventB(u32);
 /// simple_event!(MyEventB, u32);
 ///
-/// pub struct MyEventC(u32);
-/// simple_event!(MyEventC, u32, 42);
+/// pub struct MyEventC<T>(T);
+/// simple_event!([T] MyEventC<T>, u32, 42);
 /// ```
 ///
 /// Usage:
 /// ```
+/// # #![feature(existential_type, futures_api, async_await, await_macro)]
 /// # use static_events::*;
 /// # pub struct MyEventB(u32); simple_event!(MyEventB, u32);
+/// #[derive(Events)]
 /// struct MyEventHandler;
-/// #[event_dispatch]
+///
+/// #[events_impl]
 /// impl MyEventHandler {
 ///     #[event_handler]
 ///     fn handle_event(ev: &MyEventB, state: &mut u32) {
 ///         *state = ev.0 * ev.0;
 ///     }
 /// }
-/// assert_eq!(MyEventHandler.dispatch(MyEventB(12)), 144);
+///
+/// let handler = Handler::new(MyEventHandler);
+/// assert_eq!(handler.dispatch(MyEventB(12)), 144);
 /// ```
 #[macro_export]
 macro_rules! simple_event {
@@ -90,15 +95,21 @@ macro_rules! simple_event {
 /// # use static_events::*; use std::io;
 /// pub struct MyEvent(u32);
 /// failable_event!(MyEvent, u32, io::Error);
+///
+/// pub struct MyEvent2<T>(T);
+/// failable_event!([T] MyEvent2<T>, u32, io::Error);
 /// ```
 ///
 /// Usage:
 ///
 /// ```
+/// # #![feature(existential_type, futures_api, async_await, await_macro)]
 /// # use static_events::*; use std::io;
 /// # pub struct MyEvent(u32); failable_event!(MyEvent, u32, ::std::io::Error);
+/// #[derive(Events)]
 /// struct MyEventHandler;
-/// #[event_dispatch]
+///
+/// #[events_impl]
 /// impl MyEventHandler {
 ///     #[event_handler]
 ///     fn handle_event(ev: &MyEvent, state: &mut u32) -> io::Result<()> {
@@ -107,8 +118,10 @@ macro_rules! simple_event {
 ///         Ok(())
 ///     }
 /// }
-/// assert_eq!(MyEventHandler.dispatch(MyEvent(12)).ok(), Some(144));
-/// assert!(MyEventHandler.dispatch(MyEvent(100)).is_err());
+///
+/// let handler = Handler::new(MyEventHandler);
+/// assert_eq!(handler.dispatch(MyEvent(12)).ok(), Some(144));
+/// assert!(handler.dispatch(MyEvent(100)).is_err());
 /// ```
 #[macro_export]
 macro_rules! failable_event {
