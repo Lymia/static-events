@@ -1,4 +1,4 @@
-//! A handle holding a reference to an [`EventDispatch`] for use in concurrent applications.
+//! A handle holding a reference to an [`Handler`] for use in concurrent applications.
 
 use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -8,12 +8,12 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::process::abort;
 use parking_lot::{RwLock, RwLockWriteGuard, RwLockReadGuard, MappedRwLockReadGuard};
 
-use crate::handlers::SyncEventDispatch;
+use crate::handlers::{Handler, SyncEvents};
 
 #[derive(Debug)]
-enum Status<D: SyncEventDispatch> {
+enum Status<E: SyncEvents> {
     Inactive,
-    Active(D),
+    Active(Handler<E>),
     Shutdown,
 }
 
@@ -30,52 +30,52 @@ impl <'a> Drop for RefcountHandle<'a> {
     }
 }
 
-pub struct DispatchHandleLock<'a, D: SyncEventDispatch> {
-    _refcount: RefcountHandle<'a>, lock: MappedRwLockReadGuard<'a, D>,
+pub struct EventsHandleLock<'a, E: SyncEvents> {
+    _refcount: RefcountHandle<'a>, lock: MappedRwLockReadGuard<'a, Handler<E>>,
 }
-impl <'a, D: SyncEventDispatch> Deref for DispatchHandleLock<'a, D> {
-    type Target = D;
-    fn deref(&self) -> &D {
+impl <'a, E: SyncEvents> Deref for EventsHandleLock<'a, E> {
+    type Target = Handler<E>;
+    fn deref(&self) -> &Handler<E> {
         &self.lock
     }
 }
 
 #[derive(Debug)]
-struct HandleData<D: SyncEventDispatch> {
-    status: RwLock<Status<D>>, display_refcount: AtomicUsize, shutdown_initialized: AtomicBool,
+struct HandleData<E: SyncEvents> {
+    status: RwLock<Status<E>>, display_refcount: AtomicUsize, shutdown_initialized: AtomicBool,
 }
 
-/// A [`EventDispatch`] wrapped for use in applications that dispatch events concurrently.
+/// A [`Handler`] wrapped for use in applications that dispatch events concurrently.
 #[derive(Debug)]
-pub struct DispatchHandle<D: SyncEventDispatch>(Arc<HandleData<D>>);
-impl <D: SyncEventDispatch> Clone for DispatchHandle<D> {
+pub struct EventsHandle<E: SyncEvents>(Arc<HandleData<E>>);
+impl <E: SyncEvents> Clone for EventsHandle<E> {
     fn clone(&self) -> Self {
-        DispatchHandle(self.0.clone())
+        EventsHandle(self.0.clone())
     }
 }
-impl <D: SyncEventDispatch> DispatchHandle<D> {
-    pub fn new() -> DispatchHandle<D> {
-        DispatchHandle(Arc::new(HandleData {
+impl <E: SyncEvents> EventsHandle<E> {
+    pub fn new() -> EventsHandle<E> {
+        EventsHandle(Arc::new(HandleData {
             status: RwLock::new(Status::Inactive),
             display_refcount: AtomicUsize::new(0),
             shutdown_initialized: AtomicBool::new(false),
         }))
     }
 
-    // Sets the handler underlying this DispatchHandle. May only be called once.
-    pub fn activate_handle(&self, handler: D) {
+    // Sets the handler underlying this EventsHandle. May only be called once.
+    pub fn activate_handle(&self, events: E) {
         let mut lock = self.0.status.write();
         if let Status::Inactive = *lock {
-            *lock = Status::Active(handler);
+            *lock = Status::Active(Handler::new(events));
         } else {
-            panic!("DispatchHandle already activated.")
+            panic!("EventsHandle already activated.")
         }
     }
 
     // Gets whether this DispatchHandle is active.
     pub fn is_shutdown(&self) -> bool {
         self.0.shutdown_initialized.load(Ordering::SeqCst) || match &*self.0.status.read() {
-            Status::Inactive => panic!("DispatchHandle not yet active."),
+            Status::Inactive => panic!("EventsHandle not yet active."),
             Status::Active(_) => false,
             Status::Shutdown => true,
         }
@@ -88,18 +88,18 @@ impl <D: SyncEventDispatch> DispatchHandle<D> {
 
     fn initialize_shutdown(&self) {
         if self.0.shutdown_initialized.compare_and_swap(false, true, Ordering::SeqCst) {
-            panic!("Attempt to shutdown a DispatchHandle twice!");
+            panic!("Attempt to shutdown a EventsHandle twice!");
         }
     }
-    fn internal_shutdown(&self, mut lock: RwLockWriteGuard<Status<D>>) {
+    fn internal_shutdown(&self, mut lock: RwLockWriteGuard<Status<E>>) {
         if let Status::Active(_) = &*lock {
             *lock = Status::Shutdown;
         } else {
-            panic!("Attempt to shutdown a DispatchHandle twice! (unreachable case?)");
+            panic!("Attempt to shutdown a EventsHandle twice! (unreachable case?)");
         }
     }
 
-    /// Stops any further messages from being sent to this `DispatchHandle`, and drops the
+    /// Stops any further messages from being sent to this `EventsHandle`, and drops the
     /// underlying event handler.
     ///
     /// This blocks until all locks on this handle are cleared.
@@ -112,7 +112,7 @@ impl <D: SyncEventDispatch> DispatchHandle<D> {
         self.internal_shutdown(self.0.status.write());
     }
 
-    /// Stops any further messages from being sent to this `DispatchHandle`, and drops the
+    /// Stops any further messages from being sent to this `EventsHandle`, and drops the
     /// underlying event handler.
     ///
     /// This blocks until all locks on this handle are cleared. The closure provided is
@@ -135,9 +135,9 @@ impl <D: SyncEventDispatch> DispatchHandle<D> {
         }
     }
 
-    /// Returns a lock to the underlying `DispatchHandle` wrapped in a [`Some`], or [`None`]
-    /// if it has already been shut down.
-    pub fn lock(&self) -> Option<DispatchHandleLock<D>> {
+    /// Returns a lock to the underlying [`Handler`] wrapped in a [`Some`], or [`None`] if it has
+    /// already been shut down.
+    pub fn lock(&self) -> Option<EventsHandleLock<E>> {
         let lock = self.0.status.read();
         match &*lock {
             Status::Inactive => panic!("DispatchHandle not yet active."),
@@ -147,7 +147,7 @@ impl <D: SyncEventDispatch> DispatchHandle<D> {
                     _ => unreachable!(),
                 });
                 let refcount = RefcountHandle::inc(&self.0.display_refcount);
-                Some(DispatchHandleLock { lock, _refcount: refcount })
+                Some(EventsHandleLock { lock, _refcount: refcount })
             },
             Status::Shutdown => None,
         }

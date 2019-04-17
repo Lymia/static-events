@@ -202,6 +202,7 @@ impl <'a, E: Events, Ev: Event> Future for AsyncDispatchFuture<'a, E, Ev> {
 }
 
 #[repr(transparent)]
+#[derive(Copy, Clone, Default, Debug)]
 /// A wrapper for [`Events`] that allows dispatching events into them.
 pub struct Handler<E: Events>(E);
 impl <E: Events> Handler<E> {
@@ -276,12 +277,6 @@ impl <E: Events> Handler<E> {
     }
 }
 
-/*
-/// A [`RawEventDispatch`] that can be shared between threads.
-pub trait SyncRawEventDispatch: RawEventDispatch + Sync + Send { }
-impl <T: RawEventDispatch + Sync + Send> SyncEventDispatch for T { }
-
-/// A [`EventDispatch`] that can be shared between threads.
-pub trait SyncEventDispatch: EventDispatch + Sync + Send { }
-impl <T: EventDispatch + Sync + Send> SyncEventDispatch for T { }
-*/
+/// An [`Events`] that can be shared between threads.
+pub trait SyncEvents: Events + Sync + Send { }
+impl <T: Events + Sync + Send> SyncEvents for T { }

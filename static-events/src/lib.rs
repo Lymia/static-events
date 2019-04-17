@@ -126,11 +126,12 @@ mod events_types;
 pub use crate::events_types::*;
 
 pub mod events;
+pub mod handle;
 pub mod handlers;
 
 pub use crate::events::{Event, EventResult};
 pub use crate::events::EventResult::*;
-pub use crate::handlers::{Events, Handler};
+pub use crate::handlers::{Events, SyncEvents, Handler};
 pub use crate::handlers::{EvInit, EvCheck, EvBeforeEvent, EvOnEvent, EvAfterEvent};
 
 // Fixes for documentation.
@@ -140,5 +141,3 @@ pub use crate::handlers::{EvInit, EvCheck, EvBeforeEvent, EvOnEvent, EvAfterEven
 #[doc(hidden)]
 /// This module is used by static-events_derive, and is not stable API.
 pub mod private;
-
-//pub mod handle;
