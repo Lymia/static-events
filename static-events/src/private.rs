@@ -3,6 +3,7 @@
 use crate::events::*;
 use crate::handlers::*;
 use std::future::Future;
+use std::hint::unreachable_unchecked;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Poll, Context};
@@ -36,7 +37,7 @@ pub fn async_already_done_error() -> ! {
 pub struct FutureSyncnessWrapper<F: Future<Output = EventResult>, T>(F, PhantomData<(T, *mut ())>);
 impl <F: Future<Output = EventResult>, T> FutureSyncnessWrapper<F, T> {
     #[inline(always)]
-    pub fn new(f: F) -> FutureSyncnessWrapper<F, T> {
+    pub unsafe fn new(f: F) -> FutureSyncnessWrapper<F, T> {
         FutureSyncnessWrapper(f, PhantomData)
     }
 }
@@ -183,5 +184,57 @@ impl <E> From<Result<(), E>> for FailableReturn<E> {
 impl <E> From<Result<EventResult, E>> for FailableReturn<E> {
     fn from(res: Result<EventResult, E>) -> Self {
         FailableReturn(res)
+    }
+}
+
+#[doc(hidden)]
+pub macro fragment_future_impl_methods(
+    <$lt:tt, $this:ty, $handler:ty, $ev:ty, $phase:ty, $discrim:ty, $result_type:ty $(,)?>
+    $state_ty:ident $phase_variant:ident $do_phase:ident $do_resume:ident $next:ident $done:ident
+    $sync:ident $async:ident $errored_var:ident $done_var:ident
+    $(($($ignore_response:tt)*))*
+) {
+    /// Resumes a future suspended due to a phase yielding.
+    /// This assumes the phase is initialized, is defined asynchronously,
+    fn $do_resume(&mut self, cx: &mut Context<'_>) -> Poll<$result_type> {
+        if !is_implemented::<$lt, $this, $handler, $ev, $phase, $discrim>() ||
+           !is_async::<$lt, $this, $handler, $ev, $phase, $discrim>() {
+            unsafe { unreachable_unchecked() }
+        } if let $state_ty::$phase_variant(future) = &mut self.fut_state {
+            self.is_poisoned = true;
+            let res = unsafe { Pin::new_unchecked(future) }.poll(cx);
+            self.is_poisoned = false;
+            match res {
+                Poll::Ready(EventResult::EvOk) $(| Poll::Ready($($ignore_response)*))* => {
+                    self.fut_state = $state_ty::$errored_var;
+                    self.$next(cx)
+                },
+                Poll::Ready(_) => {
+                    self.fut_state = $state_ty::$done_var;
+                    self.$done(cx)
+                },
+                Poll::Pending => Poll::Pending,
+            }
+        } else {
+            unsafe { unreachable_unchecked() }
+        }
+    }
+
+    fn $do_phase(&mut self, cx: &mut Context<'_>) -> Poll<$result_type> {
+        self.fut_state = $state_ty::$errored_var;
+        if !is_implemented::<$lt, $this, $handler, $ev, $phase, $discrim>() {
+            // Skip undefined phases
+            self.$next(cx)
+        } else if !is_async::<$lt, $this, $handler, $ev, $phase, $discrim>() {
+            // Run phases defined as non-async directly
+            match unsafe { self.$sync() } {
+                EventResult::EvOk $(| $($ignore_response)*)* => self.$next(cx),
+                _ => self.$done(cx),
+            }
+        } else {
+            // Set up the phase for asynchronous execution
+            self.fut_state = $state_ty::$phase_variant(unsafe { self.$async() });
+            self.$do_resume(cx)
+        }
     }
 }

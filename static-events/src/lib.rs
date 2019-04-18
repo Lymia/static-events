@@ -1,5 +1,5 @@
 #![feature(const_fn, nll, specialization, futures_api, async_await, await_macro)]
-#![feature(existential_type, doc_cfg)]
+#![feature(existential_type, decl_macro, doc_cfg)]
 
 // TODO: Implement filtering of some kind on events, and state between phases.
 // TODO: Reevaluate all our unsafety and optimization hacks as rustc's async support improves.

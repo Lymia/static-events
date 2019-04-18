@@ -3,7 +3,6 @@
 use crate::events::*;
 use std::cell::UnsafeCell;
 use std::future::Future;
-use std::hint::unreachable_unchecked;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -85,90 +84,56 @@ macro_rules! make_existentials {
     )*}
 }
 macro_rules! make_existential_fns {
-    ($(($name:ident $id:ident $phase:ident $do_phase:ident $do_resume:ident $next:ident))*) => {$(
+    ($((
+        $sync:ident $async:ident $existential:ident $phase:ident
+        $do_phase:ident $do_resume:ident $next:ident
+    ))*) => {$(
+        unsafe fn $sync(&self) -> EventResult {
+            crate::private::on_phase::<E, E, Ev, $phase, DefaultHandler>(
+                &self.this.0, &self.this,
+                &mut *self.ev.get(), (&mut *self.state.get()).as_mut().unwrap(),
+            )
+        }
+
         /// This is extracted into a function to set the existential type properly.
-        unsafe fn $name(&self) -> $id<'a, E, Ev> {
+        unsafe fn $async(&self) -> $existential<'a, E, Ev> {
             crate::private::on_phase_async::<'a, E, E, Ev, $phase, DefaultHandler>(
                 &self.this.0, &self.this,
                 &mut *self.ev.get(), (&mut *self.state.get()).as_mut().unwrap(),
             )
         }
 
-        /// Resumes a future suspended due to a phase yielding.
-        /// This assumes the phase is initialized, is defined asynchronously,
-        fn $do_resume(&mut self, cx: &mut Context<'_>) -> Poll<Ev::RetVal> {
-            if !crate::private::is_implemented::<'a, E, E, Ev, $phase, DefaultHandler>() ||
-               !crate::private::is_async::<'a, E, E, Ev, $phase, DefaultHandler>() {
-                unsafe { unreachable_unchecked() }
-            } if let AsyncDispatchState::$phase(future) = &mut self.fut_state {
-                self.is_poisoned = true;
-                let res = unsafe { Pin::new_unchecked(future) }.poll(cx);
-                self.is_poisoned = false;
-                match res {
-                    Poll::Ready(EventResult::EvOk) | Poll::Ready(EventResult::EvCancelStage) => {
-                        self.fut_state = AsyncDispatchState::Errored;
-                        self.$next(cx)
-                    },
-                    Poll::Ready(_) => self.done(cx),
-                    Poll::Pending => Poll::Pending,
-                }
-            } else {
-                unsafe { unreachable_unchecked() }
-            }
-        }
-
-        fn $do_phase(&mut self, cx: &mut Context<'_>) -> Poll<Ev::RetVal> {
-            self.fut_state = AsyncDispatchState::Errored;
-            if !crate::private::is_implemented::<'a, E, E, Ev, $phase, DefaultHandler>() {
-                // Skip undefined phases
-                self.$next(cx)
-            } else if !crate::private::is_async::<'a, E, E, Ev, $phase, DefaultHandler>() {
-                // Run phases defined as non-async directly
-                let result = unsafe {
-                    crate::private::on_phase::<E, E, Ev, $phase, DefaultHandler>(
-                        &self.this.0, &self.this,
-                        &mut *self.ev.get(), (&mut *self.state.get()).as_mut().unwrap(),
-                    )
-                };
-                match result {
-                    EventResult::EvOk | EventResult::EvCancelStage => self.$next(cx),
-                    _ => self.done(cx),
-                }
-            } else {
-                // Set up the phase for asynchronous execution
-                let handler = unsafe { self.$name() };
-                self.fut_state = AsyncDispatchState::$phase(handler);
-                self.$do_resume(cx)
-            }
-        }
+        crate::private::fragment_future_impl_methods!(
+            <'a, E, E, Ev, $phase, DefaultHandler, Ev::RetVal>
+            AsyncDispatchState $phase $do_phase $do_resume $next done
+            $sync $async Errored Done
+            (EventResult::EvCancelStage)
+        );
     )*}
 }
 make_existentials! {
-    EvInitExistential EvCheckExistential
-    EvBeforeEventExistential EvOnEventExistential EvAfterEventExistential
+    EvInitFuture EvCheckFuture EvBeforeFuture EvEventFuture EvAfterFuture
 }
 enum AsyncDispatchState<'a, E: Events, Ev: Event + 'a> {
     NeverRun, Done, Errored,
-    EvInit       (EvInitExistential       <'a, E, Ev>),
-    EvCheck      (EvCheckExistential      <'a, E, Ev>),
-    EvBeforeEvent(EvBeforeEventExistential<'a, E, Ev>),
-    EvOnEvent    (EvOnEventExistential    <'a, E, Ev>),
-    EvAfterEvent (EvAfterEventExistential <'a, E, Ev>),
+    EvInit       (EvInitFuture  <'a, E, Ev>),
+    EvCheck      (EvCheckFuture <'a, E, Ev>),
+    EvBeforeEvent(EvBeforeFuture<'a, E, Ev>),
+    EvOnEvent    (EvEventFuture <'a, E, Ev>),
+    EvAfterEvent (EvAfterFuture <'a, E, Ev>),
 }
 struct AsyncDispatchFuture<'a, E: Events, Ev: Event + 'a> {
-    this: &'a Handler<E>,
-    ev: UnsafeCell<Ev>,
-    state: UnsafeCell<Option<Ev::State>>,
-    is_poisoned: bool,
-    fut_state: AsyncDispatchState<'a, E, Ev>,
+    this: &'a Handler<E>, ev: UnsafeCell<Ev>, state: UnsafeCell<Option<Ev::State>>,
+    pub is_poisoned: bool,
+    pub fut_state: AsyncDispatchState<'a, E, Ev>,
 }
 impl <'a, E: Events, Ev: Event> AsyncDispatchFuture<'a, E, Ev> {
     make_existential_fns! {
-        (on_init   EvInitExistential        EvInit        do_init   resume_init   do_check )
-        (on_check  EvCheckExistential       EvCheck       do_check  resume_check  do_before)
-        (on_before EvBeforeEventExistential EvBeforeEvent do_before resume_before do_event )
-        (on_event  EvOnEventExistential     EvOnEvent     do_event  resume_event  do_after )
-        (on_after  EvAfterEventExistential  EvAfterEvent  do_after  resume_after  done     )
+        (sync_init   async_init   EvInitFuture   EvInit        do_init   resume_init   do_check )
+        (sync_check  async_check  EvCheckFuture  EvCheck       do_check  resume_check  do_before)
+        (sync_before async_before EvBeforeFuture EvBeforeEvent do_before resume_before do_event )
+        (sync_event  async_event  EvEventFuture  EvOnEvent     do_event  resume_event  do_after )
+        (sync_after  async_after  EvAfterFuture  EvAfterEvent  do_after  resume_after  done     )
     }
 
     fn done(&mut self, _: &mut Context<'_>) -> Poll<Ev::RetVal> {
@@ -202,7 +167,7 @@ impl <'a, E: Events, Ev: Event> Future for AsyncDispatchFuture<'a, E, Ev> {
 }
 
 #[repr(transparent)]
-#[derive(Copy, Clone, Default, Debug)]
+#[derive(Clone, Default, Debug)]
 /// A wrapper for [`Events`] that allows dispatching events into them.
 pub struct Handler<E: Events>(E);
 impl <E: Events> Handler<E> {
