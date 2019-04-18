@@ -131,6 +131,7 @@ pub mod handlers;
 
 pub use crate::events::{Event, EventResult};
 pub use crate::events::EventResult::*;
+pub use crate::handle::EventsHandle;
 pub use crate::handlers::{Events, SyncEvents, Handler};
 pub use crate::handlers::{EvInit, EvCheck, EvBeforeEvent, EvOnEvent, EvAfterEvent};
 

@@ -277,9 +277,19 @@ impl <E: Events> Handler<E> {
     ) -> impl Future<Output = Ev::RetVal> + 'static {
         let state = ev.starting_state(self);
         AsyncDispatchFutureStatic {
-            this: Handler(self.0.clone()),
+            this: self.clone(),
             fut: AsyncDispatchFuture::new(::std::ptr::null(), ev, state)
         }
+    }
+
+    /// Returns the number of active references to this `Handler`.
+    pub fn refcount(&self) -> usize {
+        Arc::strong_count(&self.0)
+    }
+}
+impl <E: Events> Clone for Handler<E> {
+    fn clone(&self) -> Self {
+        Handler(self.0.clone())
     }
 }
 
