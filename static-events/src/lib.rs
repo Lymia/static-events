@@ -2,7 +2,7 @@
 #![feature(existential_type, decl_macro, doc_cfg)]
 
 // TODO: Implement filtering of some kind on events, and state between phases.
-// TODO: Reevaluate all our unsafety and optimization hacks as rustc's async support improves.
+// TODO: Reevaluate all our unsafety and optimization hacks as Rust's async support improves.
 // TODO: Document how to set the phase of an event handler.
 
 //! A generic zero-cost event handler system built on compile-time magic.

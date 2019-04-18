@@ -4,7 +4,9 @@ use crate::events::*;
 use std::cell::UnsafeCell;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::marker::PhantomData;
 
 pub(crate) mod private {
     pub trait Sealed { }
@@ -89,20 +91,18 @@ macro_rules! make_existential_fns {
         $do_phase:ident $do_resume:ident $next:ident
     ))*) => {$(
         unsafe fn $sync(&self) -> EventResult {
+            let this = &*self.this;
             crate::private::on_phase::<E, E, Ev, $phase, DefaultHandler>(
-                &self.this.0, &self.this,
-                &mut *self.ev.get(), (&mut *self.state.get()).as_mut().unwrap(),
+                &this.0, &this, &mut *self.ev.get(), (&mut *self.state.get()).as_mut().unwrap(),
             )
         }
-
         /// This is extracted into a function to set the existential type properly.
         unsafe fn $async(&self) -> $existential<'a, E, Ev> {
+            let this = &*self.this;
             crate::private::on_phase_async::<'a, E, E, Ev, $phase, DefaultHandler>(
-                &self.this.0, &self.this,
-                &mut *self.ev.get(), (&mut *self.state.get()).as_mut().unwrap(),
+                &this.0, &this, &mut *self.ev.get(), (&mut *self.state.get()).as_mut().unwrap(),
             )
         }
-
         crate::private::fragment_future_impl_methods!(
             <'a, E, E, Ev, $phase, DefaultHandler, Ev::RetVal>
             AsyncDispatchState $phase $do_phase $do_resume $next done
@@ -123,11 +123,17 @@ enum AsyncDispatchState<'a, E: Events, Ev: Event + 'a> {
     EvAfterEvent (EvAfterFuture <'a, E, Ev>),
 }
 struct AsyncDispatchFuture<'a, E: Events, Ev: Event + 'a> {
-    this: &'a Handler<E>, ev: UnsafeCell<Ev>, state: UnsafeCell<Option<Ev::State>>,
+    this: *const Handler<E>, ev: UnsafeCell<Ev>, state: UnsafeCell<Option<Ev::State>>,
     pub is_poisoned: bool,
     pub fut_state: AsyncDispatchState<'a, E, Ev>,
 }
-impl <'a, E: Events, Ev: Event> AsyncDispatchFuture<'a, E, Ev> {
+impl <'a, E: Events, Ev: Event + 'a> AsyncDispatchFuture<'a, E, Ev> {
+    fn new(this: *const Handler<E>, ev: Ev, state: Ev::State) -> Self {
+        AsyncDispatchFuture {
+            this, ev: UnsafeCell::new(ev), state: UnsafeCell::new(Some(state)),
+            is_poisoned: false, fut_state: AsyncDispatchState::NeverRun,
+        }
+    }
     make_existential_fns! {
         (sync_init   async_init   EvInitFuture   EvInit        do_init   resume_init   do_check )
         (sync_check  async_check  EvCheckFuture  EvCheck       do_check  resume_check  do_before)
@@ -135,45 +141,66 @@ impl <'a, E: Events, Ev: Event> AsyncDispatchFuture<'a, E, Ev> {
         (sync_event  async_event  EvEventFuture  EvOnEvent     do_event  resume_event  do_after )
         (sync_after  async_after  EvAfterFuture  EvAfterEvent  do_after  resume_after  done     )
     }
-
     fn done(&mut self, _: &mut Context<'_>) -> Poll<Ev::RetVal> {
         self.fut_state = AsyncDispatchState::Done;
+        let this = unsafe { &*self.this };
         let ev = unsafe { &mut *self.ev.get() };
         let state = unsafe { &mut *self.state.get() };
-        Poll::Ready(ev.to_return_value(self.this, state.take().unwrap()))
+        Poll::Ready(ev.to_return_value(this, state.take().unwrap()))
     }
-}
-impl <'a, E: Events, Ev: Event> Future for AsyncDispatchFuture<'a, E, Ev> {
-    type Output = Ev::RetVal;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let fut = unsafe { self.get_unchecked_mut() };
-        if fut.is_poisoned {
-            fut.fut_state = AsyncDispatchState::Errored;
-            fut.is_poisoned = false;
+    fn do_poll(&mut self, cx: &mut Context<'_>, handler: *const Handler<E>) -> Poll<Ev::RetVal> {
+        if self.is_poisoned {
+            self.fut_state = AsyncDispatchState::Errored;
+            self.is_poisoned = false;
         }
-
-        match fut.fut_state {
-            AsyncDispatchState::NeverRun         => fut.do_init(cx),
+        match self.fut_state {
+            AsyncDispatchState::NeverRun         => {
+                self.this = handler;
+                self.do_init(cx)
+            },
             AsyncDispatchState::Done             => crate::private::async_already_done_error(),
             AsyncDispatchState::Errored          => crate::private::async_panicked_error(),
-            AsyncDispatchState::EvInit       (_) => fut.resume_init(cx),
-            AsyncDispatchState::EvCheck      (_) => fut.resume_check(cx),
-            AsyncDispatchState::EvBeforeEvent(_) => fut.resume_before(cx),
-            AsyncDispatchState::EvOnEvent    (_) => fut.resume_event(cx),
-            AsyncDispatchState::EvAfterEvent (_) => fut.resume_after(cx),
+            AsyncDispatchState::EvInit       (_) => self.resume_init(cx),
+            AsyncDispatchState::EvCheck      (_) => self.resume_check(cx),
+            AsyncDispatchState::EvBeforeEvent(_) => self.resume_before(cx),
+            AsyncDispatchState::EvOnEvent    (_) => self.resume_event(cx),
+            AsyncDispatchState::EvAfterEvent (_) => self.resume_after(cx),
         }
     }
 }
+unsafe impl <'a, E: Events, Ev: Event + 'a> Send for AsyncDispatchFuture<'a, E, Ev>
+    where E: Sync, Ev: Send, Ev::State: Send, AsyncDispatchState<'a, E, Ev>: Send { }
 
-#[repr(transparent)]
-#[derive(Clone, Default, Debug)]
+struct AsyncDispatchFutureStatic<E: Events, Ev: Event + 'static> {
+    this: Handler<E>, fut: AsyncDispatchFuture<'static, E, Ev>,
+}
+impl <E: Events, Ev: Event + 'static> Future for AsyncDispatchFutureStatic<E, Ev> {
+    type Output = Ev::RetVal;
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        let this = unsafe { self.get_unchecked_mut() };
+        this.fut.do_poll(cx, &this.this)
+    }
+}
+
+struct AsyncDispatchFutureBounded<'a, E: Events, Ev: Event + 'a> {
+    fut: AsyncDispatchFuture<'a, E, Ev>,
+    phantom: PhantomData<&'a Handler<E>>,
+}
+impl <'a, E: Events, Ev: Event + 'a> Future for AsyncDispatchFutureBounded<'a, E, Ev> {
+    type Output = Ev::RetVal;
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        let this = unsafe { self.get_unchecked_mut() };
+        this.fut.do_poll(cx, this.fut.this)
+    }
+}
+
+#[derive(Default, Debug)]
 /// A wrapper for [`Events`] that allows dispatching events into them.
-pub struct Handler<E: Events>(E);
+pub struct Handler<E: Events>(Arc<E>);
 impl <E: Events> Handler<E> {
     /// Wraps an [`Events`] to allow dispatching events into it.
     pub fn new(e: E) -> Self {
-        Handler(e)
+        Handler(Arc::new(e))
     }
 
     /// Retrieves a service from an [`Events`].
@@ -228,16 +255,30 @@ impl <E: Events> Handler<E> {
         ev.to_return_value(self, state)
     }
 
-    /// Dispatches an event asynchronously.
+    /// Dispatches an event asynchronously. This future is bounded by the lifetime of `&self`
+    /// and the event.
     ///
     /// Any synchronous events are run immediately as part of the [`Future::poll`] execution.
     pub fn dispatch_async<'a, Ev: Event + 'a>(
         &'a self, ev: Ev,
     ) -> impl Future<Output = Ev::RetVal> + 'a {
         let state = ev.starting_state(self);
-        AsyncDispatchFuture {
-            this: self, ev: UnsafeCell::new(ev), state: UnsafeCell::new(Some(state)),
-            is_poisoned: false, fut_state: AsyncDispatchState::NeverRun,
+        AsyncDispatchFutureBounded {
+            fut: AsyncDispatchFuture::new(self, ev, state),
+            phantom: PhantomData,
+        }
+    }
+
+    /// Dispatches an event asynchronously.
+    ///
+    /// Any synchronous events are run immediately as part of the [`Future::poll`] execution.
+    pub fn dispatch_async_static<Ev: Event + 'static>(
+        &self, ev: Ev,
+    ) -> impl Future<Output = Ev::RetVal> + 'static {
+        let state = ev.starting_state(self);
+        AsyncDispatchFutureStatic {
+            this: Handler(self.0.clone()),
+            fut: AsyncDispatchFuture::new(::std::ptr::null(), ev, state)
         }
     }
 }

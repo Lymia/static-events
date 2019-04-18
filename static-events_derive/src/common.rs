@@ -81,6 +81,13 @@ pub fn strip_lifetimes(a: &Generics) -> Generics {
     process_generics(&[a], true)
 }
 
+/// Adds where clauses to a set of generics
+pub fn add_where(a: &Generics, where_clauses: impl ToTokens) -> Generics {
+    let mut generics = parse2::<Generics>(quote! { <> }).unwrap();
+    generics.where_clause = Some(parse2(quote! { where #where_clauses }).unwrap());
+    merge_generics(a, &generics)
+}
+
 /// Creates a span for an entire TokenStream.
 pub fn stream_span(attr: TokenStream) -> Span {
     let head_span = attr.clone().into_iter().next().unwrap().span();
@@ -178,6 +185,7 @@ pub fn make_merge_event_handler(
     let event_generics = generics(&event_generics_raw);
 
     let handler_generics = merge_generics(&event_generics, item_generics);
+
     let (handler_impl_bounds, handler_ty_param, handler_where_bounds) =
         handler_generics.split_for_impl();
     let (self_impl_bounds, self_ty_param, self_where_bounds) =
@@ -187,6 +195,16 @@ pub fn make_merge_event_handler(
         EventHandlerTarget::Ident(id) => quote! { #id #self_ty_param },
         EventHandlerTarget::Type(tp) => quote! { #tp },
     };
+
+    let send_generics_raw = quote! {
+        #name #self_ty_param: ::std::marker::Sync,
+        __EventDispatch: ::std::marker::Sync,
+        __EventType: ::std::marker::Send,
+        __EventType::State: ::std::marker::Send,
+        #future_state #handler_ty_param: ::std::marker::Send,
+    };
+    let send_generics = add_where(&handler_generics, send_generics_raw);
+    let (_, _, send_where_bounds) = send_generics.split_for_impl();
 
     let handler_ty = quote! { ::static_events::handlers::EventHandler<
         '__EventLifetime, __EventDispatch, __EventType, __EventPhase, #distinguisher,
@@ -258,8 +276,7 @@ pub fn make_merge_event_handler(
                     let subhandler = #extract_fn(self.this);
                     #call_async
                 }
-
-                crate::private::fragment_future_impl_methods!(
+                ::static_events::private::fragment_future_impl_methods!(
                     <'__EventLifetime, #field_tp, __EventDispatch, __EventType, __EventPhase,
                      #distinguisher, ::static_events::EventResult>
                     #future_state #variant_name #run_fn #resume_fn #next_fn done
@@ -274,7 +291,7 @@ pub fn make_merge_event_handler(
                 }
             }});
             future_resume_matcher.extend(quote! {
-                #variant_name(_) => fut.#resume_fn(context),
+                #future_state::#variant_name(_) => fut.#resume_fn(context),
             });
         }
 
@@ -359,21 +376,23 @@ pub fn make_merge_event_handler(
             fn poll(
                 self: ::std::pin::Pin<&mut Self>, context: &mut ::std::task::Context<'_>,
             ) -> ::std::task::Poll<Self::Output> {
-                use #future_state::*;
                 let fut = unsafe { self.get_unchecked_mut() };
                 if fut.is_poisoned {
-                    fut.fut_state = Errored;
+                    fut.fut_state = #future_state::Errored;
                     fut.is_poisoned = false;
                 }
                 match &fut.fut_state {
-                    NeverRun => #future_init_action,
-                    Done => ::static_events::private::async_already_done_error(),
-                    Errored => ::static_events::private::async_panicked_error(),
+                    #future_state::NeverRun => #future_init_action,
+                    #future_state::Done => ::static_events::private::async_already_done_error(),
+                    #future_state::Errored => ::static_events::private::async_panicked_error(),
                     #future_resume_matcher
                     _ => unsafe { ::std::hint::unreachable_unchecked() },
                 }
             }
         }
+        unsafe impl #handler_impl_bounds ::std::marker::Send
+            for #future_type #handler_ty_param #send_where_bounds { }
+
         impl #handler_impl_bounds #handler_ty for #name #handler_where_bounds {
             const IS_IMPLEMENTED: bool = #is_implemented_expr;
             const IS_ASYNC: bool = #is_async_expr;
@@ -389,16 +408,7 @@ pub fn make_merge_event_handler(
                 ::static_events::private::event_error()
             }
 
-            type FutureType = ::static_events::private::FutureSyncnessWrapper<
-                #future_type #handler_ty_param,
-                (
-                    &'__EventLifetime #name #self_ty_param,
-                    &'__EventLifetime ::static_events::Handler<__EventDispatch>,
-                    &'__EventLifetime mut __EventType,
-                    &'__EventLifetime mut __EventType::State,
-                    #future_state #handler_ty_param,
-                ),
-            >;
+            type FutureType = #future_type #handler_ty_param;
 
             #[inline]
             fn on_phase_async(
@@ -407,13 +417,9 @@ pub fn make_merge_event_handler(
                 ev: &'__EventLifetime mut __EventType,
                 state: &'__EventLifetime mut __EventType::State,
             ) -> Self::FutureType {
-                unsafe {
-                    ::static_events::private::FutureSyncnessWrapper::new(
-                        #future_type {
-                            this: self, target, ev, state, is_poisoned: false,
-                            fut_state: #future_state::NeverRun,
-                        }
-                    )
+                #future_type {
+                    this: self, target, ev, state, is_poisoned: false,
+                    fut_state: #future_state::NeverRun,
                 }
             }
         }

@@ -318,6 +318,7 @@ fn create_normal_handler(
                         _ev: &'__EventLifetime mut #event_ty,
                         _state: &'__EventLifetime mut #event_ty_event::State,
                     ) -> ::static_events::EventResult #async_where_bounds {
+                        use ::static_events::Event;
                         let ev_result = (#async_body).into();
                         _ev.to_event_result(_state, ev_result)
                     }
@@ -348,6 +349,7 @@ fn create_normal_handler(
                 _ev: &'__EventLifetime mut #event_ty,
                 _state: &'__EventLifetime mut #event_ty_event::State,
             ) -> ::static_events::EventResult {
+                use ::static_events::Event;
                 let ev_result = (#sync_body).into();
                 _ev.to_event_result(_state, ev_result)
             }
@@ -361,6 +363,7 @@ fn create_normal_handler(
                 ev: &'__EventLifetime mut #event_ty,
                 state: &'__EventLifetime mut #event_ty_event::State,
             ) -> #future_ty {
+                use ::static_events::Event;
                 #async_body
             }
         }
