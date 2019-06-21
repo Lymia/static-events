@@ -207,7 +207,7 @@ impl <E: Events> Handler<E> {
     ///
     /// # Example
     /// ```
-    /// # #![feature(existential_type, futures_api, async_await, await_macro)]
+    /// # #![feature(existential_type, async_await)]
     /// # use static_events::*;
     /// #[derive(Eq, PartialEq, Debug)]
     /// struct TestService;

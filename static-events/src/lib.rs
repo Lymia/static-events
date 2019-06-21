@@ -1,4 +1,4 @@
-#![feature(const_fn, nll, specialization, futures_api, async_await, await_macro)]
+#![feature(const_fn, nll, specialization, async_await)]
 #![feature(existential_type, decl_macro, doc_cfg)]
 
 // TODO: Implement filtering of some kind on events, and state between phases.
@@ -15,7 +15,7 @@
 //! It currently requires the following features:
 //!
 //! ```
-//! #![feature(existential_type, futures_api, async_await, await_macro)]
+//! #![feature(existential_type, async_await)]
 //! ```
 //!
 //! # Basic model
@@ -59,7 +59,7 @@
 //!
 //! Example:
 //! ```
-//! # #![feature(existential_type, futures_api, async_await, await_macro)]
+//! # #![feature(existential_type, async_await)]
 //! # use static_events::*;
 //! struct MyEvent(u32);
 //! simple_event!(MyEvent, u32, 0);
@@ -82,7 +82,7 @@
 //! Fields inside the [`Events`] can be marked with `#[subhandler]` to cause any events to be
 //! passed on to another event handler:
 //! ```
-//! # #![feature(existential_type, futures_api, async_await, await_macro)]
+//! # #![feature(existential_type, async_await)]
 //! # use static_events::*;
 //! # struct MyEvent(u32); simple_event!(MyEvent, u32, 0);
 //! # #[derive(Events, Default)] struct MyEventHandler;

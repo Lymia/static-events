@@ -179,7 +179,7 @@ impl HandlerSig {
             quote! { unsafe { #call } }
         };
         if self.is_async {
-            EventHandlerBody::Async(quote! { r#await!(#call) })
+            EventHandlerBody::Async(quote! { (#call).await })
         } else {
             EventHandlerBody::Sync(call)
         }
