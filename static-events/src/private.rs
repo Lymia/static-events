@@ -33,7 +33,7 @@ pub fn async_already_done_error() -> ! {
 
 /// A future of which no instances should exist. Used as a the future type when no async future
 /// is defined.
-pub struct NullFuture(());
+pub enum NullFuture { }
 impl Future for NullFuture {
     type Output = EventResult;
 
