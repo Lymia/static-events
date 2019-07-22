@@ -19,6 +19,6 @@ std = ["parking_lot"]
 default = ["std"]
 
 [dependencies]
-futures-preview = "0.3.0-alpha.16"
-parking_lot = { version = "0.7.1", optional = true }
+futures-preview = "0.3.0-alpha.17"
+parking_lot = { version = "0.9.0", optional = true }
 static-events_derive = { version = "0.1.0", path = "../static-events_derive" }
