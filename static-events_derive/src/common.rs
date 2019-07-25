@@ -81,13 +81,6 @@ pub fn strip_lifetimes(a: &Generics) -> Generics {
     process_generics(&[a], true)
 }
 
-/// Adds where clauses to a set of generics
-pub fn add_where(a: &Generics, where_clauses: impl ToTokens) -> Generics {
-    let mut generics = parse2::<Generics>(quote! { <> }).unwrap();
-    generics.where_clause = Some(parse2(quote! { where #where_clauses }).unwrap());
-    merge_generics(a, &generics)
-}
-
 /// Creates a span for an entire TokenStream.
 pub fn stream_span(attr: TokenStream) -> Span {
     let head_span = attr.clone().into_iter().next().unwrap().span();
@@ -105,7 +98,7 @@ fn bool_val(
     tp: impl ToTokens, distinguisher: impl ToTokens, call: impl ToTokens,
 ) -> SynTokenStream {
     quote! {
-        || ::static_events::private::#call::<
+        ::static_events::private::#call::<
             '__EventLifetime, #tp, __EventDispatch, __EventType, __EventPhase, #distinguisher,
         >()
     }
@@ -151,19 +144,13 @@ pub enum EventHandlerTarget<'a> {
     Ident(&'a Ident), Type(&'a Type),
 }
 fn make_call(
-    field: impl ToTokens, tp: impl ToTokens, is_async: bool, is_direct: bool,
-    distinguisher: impl ToTokens,
+    field: impl ToTokens, tp: impl ToTokens, is_async: bool, distinguisher: impl ToTokens,
 ) -> SynTokenStream {
-    let args = if is_direct {
-        quote! { _target, _ev, _state }
-    } else {
-        quote! { self.target, unsafe { &mut *self.ev }, unsafe { &mut *self.state } }
-    };
     let call_fn = if is_async { quote! { on_phase_async } } else { quote! { on_phase } };
     quote! {
         ::static_events::private::#call_fn::<
             #tp, __EventDispatch, __EventType, __EventPhase, #distinguisher,
-        >(#field, #args)
+        >(#field, _target, _ev, _state)
     }
 }
 pub fn make_merge_event_handler(
@@ -172,9 +159,6 @@ pub fn make_merge_event_handler(
 ) -> SynTokenStream {
     let distinguisher = unwrap_distinguisher(distinguisher);
     let ctx = ctx.derive(&distinguisher);
-
-    let future_type = ctx.gensym("FutureImpl");
-    let future_state = ctx.gensym("FutureImplState");
 
     let event_generics_raw = quote! {
         '__EventLifetime,
@@ -188,144 +172,83 @@ pub fn make_merge_event_handler(
 
     let (handler_impl_bounds, handler_ty_param, handler_where_bounds) =
         handler_generics.split_for_impl();
-    let (self_impl_bounds, self_ty_param, self_where_bounds) =
-        item_generics.split_for_impl();
+    let handler_turbofish = handler_ty_param.as_turbofish();
+    let (_, self_ty_param, _) = item_generics.split_for_impl();
 
     let name = match name {
         EventHandlerTarget::Ident(id) => quote! { #id #self_ty_param },
         EventHandlerTarget::Type(tp) => quote! { #tp },
     };
 
-    let send_generics_raw = quote! {
-        #name #self_ty_param: ::std::marker::Sync,
-        __EventDispatch: ::std::marker::Sync,
-        __EventType: ::std::marker::Send,
-        __EventType::State: ::std::marker::Send,
-        #future_state #handler_ty_param: ::std::marker::Send,
-    };
-    let send_generics = add_where(&handler_generics, send_generics_raw);
-    let (_, _, send_where_bounds) = send_generics.split_for_impl();
-
     let handler_ty = quote! { ::static_events::handlers::EventHandler<
         '__EventLifetime, __EventDispatch, __EventType, __EventPhase, #distinguisher,
     > };
 
+    let async_fn = ctx.gensym("async_fn");
+    let existential_ty = ctx.gensym("ExistentialType");
+
     let mut is_implemented_expr = quote! { false };
     let mut is_async_expr = quote! { false };
     let mut sync_actions = SynTokenStream::new();
-    let mut other_items = SynTokenStream::new();
-    let mut future_init_action = SynTokenStream::new();
-    let mut future_init_matcher = quote! { ::static_events::private::event_error() };
-    let mut future_resume_matcher = SynTokenStream::new();
-    let mut future_data_variants = SynTokenStream::new();
-    let mut future_data_fns = SynTokenStream::new();
+    let mut async_actions = SynTokenStream::new();
 
     let mut common_group = CallGroup::new(quote! { }, common);
     common_group.is_synthetic = true;
     let mut all_groups = Vec::new();
     all_groups.push(common_group);
     all_groups.append(&mut groups);
-    for (group_i, group) in all_groups.iter().enumerate() {
+    for group in all_groups {
         let is_synthetic = group.is_synthetic;
         let mut sync_stage = SynTokenStream::new();
+        let mut async_stage = SynTokenStream::new();
 
-        for (stage_i, stage) in group.stages.iter().enumerate() {
-            let variant_name = ident!("Yielded_{}_{}", group_i, stage_i);
-            let run_fn = ident!("run_step_{}_{}", group_i, stage_i);
-            let resume_fn = ident!("resume_step_{}_{}", group_i, stage_i);
-            let fn_sync = ident!("call_sync_{}_{}", group_i, stage_i);
-            let fn_async = ident!("call_async_{}_{}", group_i, stage_i);
-            let extract_fn = ctx.gensym_id("extract",
-                                           format_args!("{}_{}", group_i, stage_i));
-            let existential_ty = ctx.gensym_id("ExistentialFuture",
-                                               format_args!("{}_{}", group_i, stage_i));
-            let next_fn = if group.stages.len() == stage_i + 1 {
-                if is_synthetic { ident!("do_selection") } else { ident!("done") }
-            } else {
-                ident!("run_step_{}_{}", group_i, stage_i + 1)
-            };
-
+        for stage in group.stages {
             let extract_field = &stage.extract_field;
             let field_tp = &stage.field_tp;
             let distinguisher = &stage.distinguisher;
 
-            let call_direct = make_call(quote!(subhandler), field_tp, false, true , distinguisher);
-            let call_sync   = make_call(quote!(subhandler), field_tp, false, false, distinguisher);
-            let call_async  = make_call(quote!(subhandler), field_tp, true , false, distinguisher);
+            let is_implemented = is_implemented(field_tp, distinguisher);
+            let is_async = is_async(field_tp, distinguisher);
+            let call_sync = make_call(quote!(subhandler), field_tp, false, distinguisher);
+            let call_async = make_call(quote!(subhandler), field_tp, true , distinguisher);
 
-            other_items.extend(quote! {
-                fn #extract_fn #self_impl_bounds (this: &#name) -> &#field_tp #self_where_bounds {
-                    #extract_field
-                }
-
-                existential type #existential_ty #handler_impl_bounds #handler_where_bounds:
-                    ::std::future::Future<Output = ::static_events::EventResult> +
-                    '__EventLifetime;
-            });
-            is_implemented_expr.extend(is_implemented(field_tp, distinguisher));
-            is_async_expr.extend(is_async(field_tp, distinguisher));
-            future_data_variants.extend(quote! {
-                #variant_name(#existential_ty #handler_ty_param),
-            });
-            future_data_fns.extend(quote! {
-                fn #fn_sync(&self) -> ::static_events::EventResult {
-                    let subhandler = #extract_fn(self.this);
-                    #call_sync
-                }
-                fn #fn_async(&self) -> #existential_ty #handler_ty_param {
-                    let subhandler = #extract_fn(self.this);
-                    #call_async
-                }
-                ::static_events::private::fragment_future_impl_methods!(
-                    <'__EventLifetime, #field_tp, __EventDispatch, __EventType, __EventPhase,
-                     #distinguisher, ::static_events::EventResult>
-                    #future_state #variant_name #run_fn #resume_fn #next_fn done
-                    #fn_sync #fn_async Errored Done
-                );
-            });
+            is_implemented_expr.extend(quote! { || #is_implemented });
+            is_async_expr.extend(quote! { || #is_async });
             sync_stage.extend(quote! {{
-                let subhandler = #extract_fn(self);
-                match #call_direct {
+                let subhandler = #extract_field;
+                match #call_sync {
                     ::static_events::EvOk => { }
                     e => return e,
                 }
             }});
-            future_resume_matcher.extend(quote! {
-                #future_state::#variant_name(_) => fut.#resume_fn(context),
-            });
+            async_stage.extend(quote! {{
+                let subhandler = #extract_field;
+                let result = if #is_async {
+                    #call_async.await
+                } else {
+                    #call_sync
+                };
+                match result {
+                    ::static_events::EvOk => { }
+                    e => return e,
+                }
+            }});
         }
 
         if is_synthetic {
-            let init_fn = if group.stages.len() == 0 {
-                ident!("do_selection")
-            } else {
-                ident!("run_step_{}_0", group_i)
-            };
-            future_init_action.extend(quote! { fut.#init_fn(context) });
             sync_actions.extend(sync_stage);
+            async_actions.extend(async_stage);
         } else {
-            let condition_fn = ctx.gensym_id("check_condition", group_i);
             let condition = &group.condition;
-            let first_fn = if group.stages.len() == 0 {
-                ident!("done")
-            } else {
-                ident!("run_step_{}_0", group_i)
-            };
-            other_items.extend(quote! {
-                fn #condition_fn #self_impl_bounds (this: &#name) -> bool {
-                    #condition
+            sync_actions.extend(quote! {
+                if #condition {
+                    #sync_stage
+                    return ::static_events::EvOk
                 }
             });
-            future_init_matcher = quote! {
-                if #condition_fn(self.this) {
-                    self.#first_fn(context)
-                } else {
-                    #future_init_matcher
-                }
-            };
-            sync_actions.extend(quote! {
-                if #condition_fn(self) {
-                    #sync_stage
+            async_actions.extend(quote! {
+                if #condition {
+                    #async_stage
                     return ::static_events::EvOk
                 }
             });
@@ -333,65 +256,19 @@ pub fn make_merge_event_handler(
     }
 
     quote! {
-        #other_items
-        enum #future_state #handler_impl_bounds #handler_where_bounds {
-            NeverRun, Done, Errored,
-            PhantomDefs(
-                ::std::marker::PhantomData<&'__EventLifetime __EventDispatch>,
-                ::std::marker::PhantomData<&'__EventLifetime mut __EventType>,
-                ::std::marker::PhantomData<&'__EventLifetime mut __EventType::State>,
-                ::std::marker::PhantomData<fn(__EventPhase) -> __EventPhase>,
-            ),
-            #future_data_variants
+        async fn #async_fn #handler_impl_bounds (
+            _this: &#name,
+            _target: &'__EventLifetime ::static_events::Handler<__EventDispatch>,
+            _ev: &'__EventLifetime mut __EventType,
+            _state: &'__EventLifetime mut __EventType::State,
+        ) -> ::static_events::EventResult #handler_where_bounds {
+            #async_actions
+            ::static_events::private::event_error()
         }
-        struct #future_type #handler_impl_bounds #handler_where_bounds {
-            this: &'__EventLifetime #name #self_ty_param,
-            target: &'__EventLifetime ::static_events::Handler<__EventDispatch>,
-            ev: *mut __EventType,
-            state: *mut __EventType::State,
-            pub is_poisoned: bool,
-            pub fut_state: #future_state #handler_ty_param,
-        }
-        impl #handler_impl_bounds #future_type #handler_ty_param #handler_where_bounds {
-            #future_data_fns
 
-            fn do_selection(
-                &mut self, context: &mut ::std::task::Context<'_>,
-            ) -> ::std::task::Poll<::static_events::EventResult> {
-                #future_init_matcher
-            }
-
-            fn done(
-                &mut self, _context: &mut ::std::task::Context<'_>,
-            ) -> ::std::task::Poll<::static_events::EventResult> {
-                self.fut_state = #future_state::Done;
-                ::std::task::Poll::Ready(::static_events::EvOk)
-            }
-        }
-        impl #handler_impl_bounds ::std::future::Future
-            for #future_type #handler_ty_param #handler_where_bounds
-        {
-            type Output = ::static_events::EventResult;
-
-            fn poll(
-                self: ::std::pin::Pin<&mut Self>, context: &mut ::std::task::Context<'_>,
-            ) -> ::std::task::Poll<Self::Output> {
-                let fut = unsafe { self.get_unchecked_mut() };
-                if fut.is_poisoned {
-                    fut.fut_state = #future_state::Errored;
-                    fut.is_poisoned = false;
-                }
-                match &fut.fut_state {
-                    #future_state::NeverRun => #future_init_action,
-                    #future_state::Done => ::static_events::private::async_already_done_error(),
-                    #future_state::Errored => ::static_events::private::async_panicked_error(),
-                    #future_resume_matcher
-                    _ => unsafe { ::std::hint::unreachable_unchecked() },
-                }
-            }
-        }
-        unsafe impl #handler_impl_bounds ::std::marker::Send
-            for #future_type #handler_ty_param #send_where_bounds { }
+        existential type #existential_ty #handler_impl_bounds #handler_where_bounds:
+                    ::std::future::Future<Output = ::static_events::EventResult> +
+                    '__EventLifetime;
 
         impl #handler_impl_bounds #handler_ty for #name #handler_where_bounds {
             const IS_IMPLEMENTED: bool = #is_implemented_expr;
@@ -404,11 +281,12 @@ pub fn make_merge_event_handler(
                 _ev: &'__EventLifetime mut __EventType,
                 _state: &'__EventLifetime mut __EventType::State,
             ) -> ::static_events::EventResult {
+                let _this = self;
                 #sync_actions
                 ::static_events::private::event_error()
             }
 
-            type FutureType = #future_type #handler_ty_param;
+            type FutureType = #existential_ty #handler_ty_param;
 
             #[inline]
             fn on_phase_async(
@@ -416,11 +294,8 @@ pub fn make_merge_event_handler(
                 target: &'__EventLifetime ::static_events::Handler<__EventDispatch>,
                 ev: &'__EventLifetime mut __EventType,
                 state: &'__EventLifetime mut __EventType::State,
-            ) -> Self::FutureType {
-                #future_type {
-                    this: self, target, ev, state, is_poisoned: false,
-                    fut_state: #future_state::NeverRun,
-                }
+            ) -> #existential_ty #handler_ty_param {
+                #async_fn #handler_turbofish (self, target, ev, state)
             }
         }
     }

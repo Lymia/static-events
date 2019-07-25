@@ -89,7 +89,7 @@ impl DerivedImpl {
             if attr.is_subhandler {
                 get_service.extend(dispatch_get_service(&field_ident));
                 stages.push(CallStage::new(quote! {
-                    if let #self_path #matches = this {
+                    if let #self_path #matches = _this {
                         #field_ident
                     } else {
                         unsafe { ::std::hint::unreachable_unchecked() }
@@ -99,7 +99,7 @@ impl DerivedImpl {
             }
         }
         self.arms.push(CallGroup::new(quote! {
-            if let #self_path #matches = this { true } else { false }
+            if let #self_path #matches = _this { true } else { false }
         }, stages));
         self.get_service_body.extend(quote!(#self_path #matches => { #get_service }));
     }
@@ -144,7 +144,7 @@ impl DerivedImpl {
         let dist = Some(quote! { ::static_events::private::HandlerImplBlock });
         let event_handler = if self.subhandlers_exist {
             let mut common = Vec::new();
-            common.push(CallStage::new(quote! { this }, quote! { #name #ty_param }, dist));
+            common.push(CallStage::new(quote! { _this }, quote! { #name #ty_param }, dist));
             make_merge_event_handler(&ctx, EventHandlerTarget::Ident(name),
                                      &input.generics, None, self.arms, common)
         } else {
@@ -170,8 +170,8 @@ impl DerivedImpl {
                 impl #handler_impl_bounds ::static_events::handlers::EventHandler<
                     '__EventLifetime, __EventDispatch, __EventType, __EventPhase,
                 > for #name #handler_where_bounds {
-                    const IS_IMPLEMENTED: bool = false #is_implemented_expr;
-                    const IS_ASYNC: bool = false #is_async_expr;
+                    const IS_IMPLEMENTED: bool = #is_implemented_expr;
+                    const IS_ASYNC: bool = #is_async_expr;
 
                     #[inline]
                     fn on_phase(

@@ -385,7 +385,7 @@ fn create_impls(
                 impls.extend(create_normal_handler(
                     ctx, self_ty, impl_generics, quote!(#phantom), phase, sig,
                 ));
-                stages.push(CallStage::new(quote!(this), self_ty, Some(quote!(#phantom))));
+                stages.push(CallStage::new(quote!(_this), self_ty, Some(quote!(#phantom))));
                 phantoms.push(phantom);
             }
         }

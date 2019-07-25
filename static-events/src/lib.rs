@@ -1,8 +1,7 @@
 #![feature(const_fn, nll, specialization, async_await)]
-#![feature(existential_type, decl_macro, doc_cfg)]
+#![feature(existential_type, doc_cfg)]
 
 // TODO: Implement filtering of some kind on events, and state between phases.
-// TODO: Reevaluate all our unsafety and optimization hacks as Rust's async support improves.
 // TODO: Document how to set the phase of an event handler.
 
 //! A generic zero-cost event handler system built on compile-time magic.
