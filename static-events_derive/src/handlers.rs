@@ -390,7 +390,7 @@ fn create_impls(
             }
         }
     }
-    let group = CallGroup::new(quote!(true), stages);
+    let group = CallGroup::new(quote!(_), stages);
     if phantoms.len() == 1 {
         let phantom = phantoms.pop().unwrap();
         impls.extend(quote! { type #phantom = #dist; });

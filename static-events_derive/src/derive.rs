@@ -47,7 +47,7 @@ fn i_ident(i: usize) -> Ident {
 }
 
 #[derive(Copy, Clone)]
-enum ContainerType {
+enum Style {
     Unit, Struct, Tuple,
 }
 fn to_vec<T, P>(punctuated: &Punctuated<T, P>) -> Vec<&T> {
@@ -61,25 +61,40 @@ struct DerivedImpl {
     get_service_body: SynTokenStream,
 }
 impl DerivedImpl {
-    fn generate_arm(&mut self, self_path: SynTokenStream, tp: ContainerType, fields: &[&Field]) {
+    fn generate_arm(
+        &mut self, self_path: SynTokenStream, tp: Style, fields: &[&Field],
+        is_struct: bool,
+    ) {
         let mut matches = SynTokenStream::new();
-        let mut get_service = SynTokenStream::new();
-        let mut stages = Vec::new();
         for (i, field) in fields.iter().enumerate() {
             let field_ident = i_ident(i);
             let field_name = &field.ident;
             matches.extend(match tp {
-                ContainerType::Unit   => unimplemented!(),
-                ContainerType::Struct => quote!(#field_name: #field_ident,),
-                ContainerType::Tuple  => quote!(#field_ident,),
+                Style::Unit   => unimplemented!(),
+                Style::Struct => quote!(#field_name: #field_ident,),
+                Style::Tuple  => quote!(#field_ident,),
             });
         }
         let matches = match tp {
-            ContainerType::Unit   => matches,
-            ContainerType::Struct => quote! { { #matches } },
-            ContainerType::Tuple  => quote! { ( #matches ) },
+            Style::Unit   => matches,
+            Style::Struct => quote! { { #matches } },
+            Style::Tuple  => quote! { ( #matches ) },
         };
+
+        let mut get_service = SynTokenStream::new();
+        let mut stages = Vec::new();
         for (i, field) in fields.iter().enumerate() {
+            let name = match tp {
+                Style::Unit   => unimplemented!(),
+                Style::Struct => {
+                    let ident = &field.ident;
+                    quote! { #ident }
+                }
+                Style::Tuple  => {
+                    let i = syn::Index::from(i);
+                    quote! { #i }
+                }
+            };
             let attr = FieldAttrs::from_attrs(&field.attrs);
             let field_ident = i_ident(i);
 
@@ -88,36 +103,44 @@ impl DerivedImpl {
             }
             if attr.is_subhandler {
                 get_service.extend(dispatch_get_service(&field_ident));
-                stages.push(CallStage::new(quote! {
-                    if let #self_path #matches = _this {
-                        #field_ident
-                    } else {
-                        unsafe { ::std::hint::unreachable_unchecked() }
+                stages.push(CallStage::new(if is_struct {
+                    quote! { &_this.#name }
+                } else {
+                    quote! {
+                        if let #self_path #matches = _this {
+                            #field_ident
+                        } else {
+                            ::static_events::private::event_error()
+                        }
                     }
                 }, &field.ty, None));
                 self.subhandlers_exist = true;
             }
         }
-        self.arms.push(CallGroup::new(quote! {
-            if let #self_path #matches = _this { true } else { false }
+        self.arms.push(CallGroup::new(match tp {
+            Style::Unit   => quote! { #self_path },
+            Style::Struct => quote! { #self_path {..} },
+            Style::Tuple  => quote! { #self_path(..) },
         }, stages));
         self.get_service_body.extend(quote!(#self_path #matches => { #get_service }));
     }
-    fn generate_arm_fields(&mut self, self_path: SynTokenStream, fields: &Fields) {
+    fn generate_arm_fields(
+        &mut self, self_path: SynTokenStream, fields: &Fields, is_struct: bool,
+    ) {
         match fields {
             Fields::Unit =>
-                self.generate_arm(self_path, ContainerType::Unit, &[]),
+                self.generate_arm(self_path, Style::Unit, &[], is_struct),
             Fields::Named(named) =>
-                self.generate_arm(self_path, ContainerType::Struct, &to_vec(&named.named)),
+                self.generate_arm(self_path, Style::Struct, &to_vec(&named.named), is_struct),
             Fields::Unnamed(unnamed) =>
-                self.generate_arm(self_path, ContainerType::Tuple, &to_vec(&unnamed.unnamed)),
+                self.generate_arm(self_path, Style::Tuple, &to_vec(&unnamed.unnamed), is_struct),
         }
     }
 
     fn for_struct(input: &DeriveInput, fields: &DataStruct) -> DerivedImpl {
         let mut derived = Self::default();
         let ident = &input.ident;
-        derived.generate_arm_fields(quote! { #ident }, &fields.fields);
+        derived.generate_arm_fields(quote! { #ident }, &fields.fields, true);
         derived
     }
     fn for_enum(input: &DeriveInput, variants: &DataEnum) -> DerivedImpl {
@@ -125,7 +148,7 @@ impl DerivedImpl {
         let ident = &input.ident;
         for variant in &variants.variants {
             let variant_ident = &variant.ident;
-            derived.generate_arm_fields(quote! { #ident::#variant_ident }, &variant.fields);
+            derived.generate_arm_fields(quote! { #ident::#variant_ident }, &variant.fields, false);
         }
         derived
     }

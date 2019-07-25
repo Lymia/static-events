@@ -132,11 +132,11 @@ impl CallStage {
 
 /// A particular arm of an event dispatch (e.g. if the Events is implemented on an enum).
 pub struct CallGroup {
-    is_synthetic: bool, condition: SynTokenStream, stages: Vec<CallStage>,
+    is_common_group: bool, matcher: SynTokenStream, stages: Vec<CallStage>,
 }
 impl CallGroup {
-    pub fn new(condition: impl ToTokens, stages: Vec<CallStage>) -> CallGroup {
-        CallGroup { is_synthetic: false, condition: condition.into_token_stream(), stages }
+    pub fn new(matcher: impl ToTokens, stages: Vec<CallStage>) -> CallGroup {
+        CallGroup { is_common_group: false, matcher: matcher.into_token_stream(), stages }
     }
 }
 
@@ -169,11 +169,14 @@ pub fn make_merge_event_handler(
     let event_generics = generics(&event_generics_raw);
 
     let handler_generics = merge_generics(&event_generics, item_generics);
+    let no_lt_generics = strip_lifetimes(&handler_generics);
 
     let (handler_impl_bounds, handler_ty_param, handler_where_bounds) =
         handler_generics.split_for_impl();
-    let handler_turbofish = handler_ty_param.as_turbofish();
     let (_, self_ty_param, _) = item_generics.split_for_impl();
+
+    let (_, no_lt_ty_param, _) = no_lt_generics.split_for_impl();
+    let no_lt_turbofish = no_lt_ty_param.as_turbofish();
 
     let name = match name {
         EventHandlerTarget::Ident(id) => quote! { #id #self_ty_param },
@@ -191,14 +194,15 @@ pub fn make_merge_event_handler(
     let mut is_async_expr = quote! { false };
     let mut sync_actions = SynTokenStream::new();
     let mut async_actions = SynTokenStream::new();
+    let mut sync_match = SynTokenStream::new();
+    let mut async_match = SynTokenStream::new();
 
     let mut common_group = CallGroup::new(quote! { }, common);
-    common_group.is_synthetic = true;
+    common_group.is_common_group = true;
     let mut all_groups = Vec::new();
     all_groups.push(common_group);
     all_groups.append(&mut groups);
     for group in all_groups {
-        let is_synthetic = group.is_synthetic;
         let mut sync_stage = SynTokenStream::new();
         let mut async_stage = SynTokenStream::new();
 
@@ -209,20 +213,18 @@ pub fn make_merge_event_handler(
 
             let is_implemented = is_implemented(field_tp, distinguisher);
             let is_async = is_async(field_tp, distinguisher);
-            let call_sync = make_call(quote!(subhandler), field_tp, false, distinguisher);
-            let call_async = make_call(quote!(subhandler), field_tp, true , distinguisher);
+            let call_sync = make_call(quote!(#extract_field), field_tp, false, distinguisher);
+            let call_async = make_call(quote!(#extract_field), field_tp, true , distinguisher);
 
             is_implemented_expr.extend(quote! { || #is_implemented });
             is_async_expr.extend(quote! { || #is_async });
             sync_stage.extend(quote! {{
-                let subhandler = #extract_field;
                 match #call_sync {
                     ::static_events::EvOk => { }
                     e => return e,
                 }
             }});
             async_stage.extend(quote! {{
-                let subhandler = #extract_field;
                 let result = if #is_async {
                     #call_async.await
                 } else {
@@ -235,23 +237,13 @@ pub fn make_merge_event_handler(
             }});
         }
 
-        if is_synthetic {
+        if group.is_common_group {
             sync_actions.extend(sync_stage);
             async_actions.extend(async_stage);
         } else {
-            let condition = &group.condition;
-            sync_actions.extend(quote! {
-                if #condition {
-                    #sync_stage
-                    return ::static_events::EvOk
-                }
-            });
-            async_actions.extend(quote! {
-                if #condition {
-                    #async_stage
-                    return ::static_events::EvOk
-                }
-            });
+            let matcher = &group.matcher;
+            sync_match.extend(quote! { #matcher => { #sync_stage } });
+            async_match.extend(quote! { #matcher => { #async_stage } });
         }
     }
 
@@ -263,7 +255,10 @@ pub fn make_merge_event_handler(
             _state: &'__EventLifetime mut __EventType::State,
         ) -> ::static_events::EventResult #handler_where_bounds {
             #async_actions
-            ::static_events::private::event_error()
+            match _this {
+                #async_match
+            }
+            ::static_events::EvOk
         }
 
         existential type #existential_ty #handler_impl_bounds #handler_where_bounds:
@@ -283,7 +278,10 @@ pub fn make_merge_event_handler(
             ) -> ::static_events::EventResult {
                 let _this = self;
                 #sync_actions
-                ::static_events::private::event_error()
+                match _this {
+                    #sync_match
+                }
+                ::static_events::EvOk
             }
 
             type FutureType = #existential_ty #handler_ty_param;
@@ -295,7 +293,7 @@ pub fn make_merge_event_handler(
                 ev: &'__EventLifetime mut __EventType,
                 state: &'__EventLifetime mut __EventType::State,
             ) -> #existential_ty #handler_ty_param {
-                #async_fn #handler_turbofish (self, target, ev, state)
+                #async_fn #no_lt_turbofish (self, target, ev, state)
             }
         }
     }
