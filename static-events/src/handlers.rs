@@ -85,7 +85,7 @@ impl <E: Events> Handler<E> {
     ///
     /// # Example
     /// ```
-    /// # #![feature(existential_type, async_await)]
+    /// # #![feature(type_alias_impl_trait, async_await)]
     /// # use static_events::*;
     /// #[derive(Eq, PartialEq, Debug)]
     /// struct TestService;

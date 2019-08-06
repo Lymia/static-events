@@ -324,8 +324,9 @@ fn create_normal_handler(
                     }
                 }
 
-                existential type #existential #handler_generics:
-                    ::std::future::Future<Output = ::static_events::EventResult> + '__EventLifetime;
+                type #existential #handler_generics =
+                    impl ::std::future::Future<Output = ::static_events::EventResult> +
+                    '__EventLifetime;
             },
             quote! {
                 self.#fn_async #async_turbofish(target, ev, state)

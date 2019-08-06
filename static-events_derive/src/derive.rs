@@ -187,8 +187,8 @@ impl DerivedImpl {
 
             let existential_ty = ctx.gensym("ExistentialFuture");
             quote! {
-                existential type #existential_ty #handler_impl_bounds #handler_where_bounds:
-                    ::std::future::Future<Output = ::static_events::EventResult> +
+                type #existential_ty #handler_impl_bounds #handler_where_bounds =
+                    impl ::std::future::Future<Output = ::static_events::EventResult> +
                     '__EventLifetime;
                 impl #handler_impl_bounds ::static_events::handlers::EventHandler<
                     '__EventLifetime, __EventDispatch, __EventType, __EventPhase,

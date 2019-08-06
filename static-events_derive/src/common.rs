@@ -261,8 +261,8 @@ pub fn make_merge_event_handler(
             ::static_events::EvOk
         }
 
-        existential type #existential_ty #handler_impl_bounds #handler_where_bounds:
-                    ::std::future::Future<Output = ::static_events::EventResult> +
+        type #existential_ty #handler_impl_bounds #handler_where_bounds =
+                    impl ::std::future::Future<Output = ::static_events::EventResult> +
                     '__EventLifetime;
 
         impl #handler_impl_bounds #handler_ty for #name #handler_where_bounds {
