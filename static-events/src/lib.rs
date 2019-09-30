@@ -1,4 +1,4 @@
-#![feature(const_fn, nll, specialization, async_await)]
+#![feature(const_fn, nll, specialization)]
 #![feature(type_alias_impl_trait, doc_cfg)]
 
 // TODO: Implement filtering of some kind on events, and state between phases.
@@ -14,7 +14,7 @@
 //! It currently requires the following features:
 //!
 //! ```
-//! #![feature(type_alias_impl_trait, async_await)]
+//! #![feature(type_alias_impl_trait)]
 //! ```
 //!
 //! # Basic model

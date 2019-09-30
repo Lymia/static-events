@@ -69,13 +69,12 @@ impl HandlerArg {
 
     fn from_param(param: &FnArg) -> Result<HandlerArg, ()> {
         match param {
-            FnArg::SelfValue(_) => {
+            FnArg::Receiver(receiver) => if receiver.reference.is_none() {
                 param.span().unstable()
                     .error("Event handlers may not take `self` by value.")
                     .emit();
                 Err(())
-            },
-            FnArg::SelfRef(self_ref) => if self_ref.mutability.is_some() {
+            } else if receiver.mutability.is_some() {
                 param.span().unstable()
                     .error("Event handlers may not take `self` by mutable reference.")
                     .emit();
@@ -83,9 +82,7 @@ impl HandlerArg {
             } else {
                 Ok(HandlerArg::SelfParam)
             },
-            FnArg::Ignored(ty) | FnArg::Captured(ArgCaptured { ty, .. }) =>
-                Self::check_any_type(ty),
-            FnArg::Inferred(_) => unreachable!(),
+            FnArg::Typed(ty) => Self::check_any_type(&ty.ty),
         }
     }
 }
@@ -107,7 +104,7 @@ struct HandlerSig {
 impl HandlerSig {
     fn find_signature(method: &ImplItemMethod) -> Result<HandlerSig, ()> {
         let sig = &method.sig;
-        if sig.decl.variadic.is_some() {
+        if sig.variadic.is_some() {
             sig.span().unstable()
                 .error("Event handlers cannot be variadic.")
                 .emit();
@@ -115,17 +112,17 @@ impl HandlerSig {
         }
 
         let mut parsed_params = Vec::new();
-        for arg in &sig.decl.inputs {
+        for arg in &sig.inputs {
             parsed_params.push((HandlerArg::from_param(arg)?, arg.span()));
         }
         let mut params = parsed_params.into_iter().peekable();
 
         let mut handler_sig = HandlerSig {
             fn_name: sig.ident.clone(),
-            method_generics: sig.decl.generics.clone(),
+            method_generics: sig.generics.clone(),
             self_param: None,
             target_param: None,
-            event_ty: Type::Verbatim(TypeVerbatim { tts: SynTokenStream::new() }),
+            event_ty: Type::Verbatim(SynTokenStream::new()),
             state_param: None,
             is_unsafe: sig.unsafety.is_some(),
             is_async: sig.asyncness.is_some(),
@@ -199,8 +196,8 @@ impl HandlerType {
     fn for_attr(attr: &Attribute) -> Result<Option<HandlerType>, ()> {
         match last_path_segment(&attr.path).as_str() {
             "event_handler" => {
-                Ok(Some(HandlerType::EventHandler(if !attr.tts.is_empty() {
-                    match parse2::<TypeParen>(attr.tts.clone()) {
+                Ok(Some(HandlerType::EventHandler(if !attr.tokens.is_empty() {
+                    match parse2::<TypeParen>(attr.tokens.clone()) {
                         Ok(tp) => tp.elem.into_token_stream(),
                         Err(_) => {
                             attr.span()
@@ -419,7 +416,7 @@ fn mark_attrs_processed(method: &mut ImplItemMethod) {
     let ident = Ident::new(&crate::RAND_IDENT, SynSpan::call_site());
     for attr in &mut method.attrs {
         if HandlerType::is_attr(attr) {
-            attr.tts = quote! { (#ident) };
+            attr.tokens = quote! { (#ident) };
         }
     }
 }

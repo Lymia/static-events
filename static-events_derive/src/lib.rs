@@ -1,4 +1,4 @@
-#![feature(proc_macro_diagnostic, proc_macro_span, drain_filter, bind_by_move_pattern_guards)]
+#![feature(proc_macro_diagnostic, proc_macro_span, drain_filter)]
 #![recursion_limit="256"]
 
 extern crate proc_macro;
