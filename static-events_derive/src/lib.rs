@@ -38,7 +38,7 @@ fn is_handler_valid(attr: TokenStream) -> bool {
 fn warn_helper_attribute(name: &str, attr: TokenStream, item: TokenStream) {
     if !is_handler_valid(attr.clone()) {
         smart_err_attr(attr, item,
-                       &format!("{} can only be used inside #[event_dispatch] blocks.", name))
+                       &format!("{} can only be used inside #[events_impl] blocks.", name))
     }
 }
 

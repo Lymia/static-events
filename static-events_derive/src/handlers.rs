@@ -427,7 +427,7 @@ pub fn events_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
         Ok(block) => block,
         Err(_) => {
             stream_span(item.clone())
-                .error("#[event_dispatch] can only be used on impl blocks.")
+                .error("#[events_impl] can only be used on impl blocks.")
                 .emit();
             return item
         },
