@@ -1,7 +1,7 @@
 use proc_macro::{TokenStream, Span};
 use proc_macro2::{Ident, Span as SynSpan, TokenStream as SynTokenStream};
-use sha2::*;
 use std::fmt::Display;
+use std::hash::{Hash, Hasher};
 use syn::*;
 use quote::*;
 
@@ -10,23 +10,26 @@ macro_rules! ident {
 }
 
 /// Helps create unique identifier names for various derives.
-pub struct GensymContext(String, String);
+pub struct GensymContext(u64);
 impl GensymContext {
-    pub fn new(target: impl Display) -> GensymContext {
-        let full_hash = Sha256::digest(target.to_string().as_bytes());
-        let full_hash = format!("{:x}", &full_hash);
-        let hash = (&full_hash[0..16]).to_string();
-        GensymContext(full_hash, hash)
+    pub fn new(disc: &impl Hash, target: &impl Hash) -> GensymContext {
+        let mut hasher = ::std::collections::hash_map::DefaultHasher::new();
+        Hash::hash(&disc, &mut hasher);
+        Hash::hash(&target, &mut hasher);
+        GensymContext(hasher.finish())
     }
-    pub fn derive(&self, target: impl Display) -> GensymContext {
-        Self::new(format_args!("{}_{}", target, self.0))
+    pub fn derive(&self, target: &impl Hash) -> GensymContext {
+        let mut hasher = ::std::collections::hash_map::DefaultHasher::new();
+        hasher.write_u64(self.0);
+        Hash::hash(&target, &mut hasher);
+        GensymContext(hasher.finish())
     }
 
     pub fn gensym(&self, purpose: &str) -> Ident {
-        ident!("__ProcMacroImplEvents_{}_{}", purpose, self.1)
+        ident!("{}_{:016x}", purpose, self.0)
     }
     pub fn gensym_id(&self, purpose: &str, id: impl Display) -> Ident {
-        ident!("__ProcMacroImplEvents_{}_{}_{}", purpose, id, self.1)
+        ident!("{}_{}_{:016x}", purpose, id, self.0)
     }
 }
 
@@ -158,7 +161,7 @@ pub fn make_merge_event_handler(
     distinguisher: Option<SynTokenStream>, mut groups: Vec<CallGroup>, common: Vec<CallStage>,
 ) -> SynTokenStream {
     let distinguisher = unwrap_distinguisher(distinguisher);
-    let ctx = ctx.derive(&distinguisher);
+    let ctx = ctx.derive(&distinguisher.to_string());
 
     let event_generics_raw = quote! {
         '__EventLifetime,

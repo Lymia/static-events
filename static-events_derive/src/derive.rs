@@ -248,7 +248,7 @@ impl DerivedImpl {
 }
 
 pub fn derive_events(input: TokenStream) -> TokenStream {
-    let ctx = GensymContext::new(&input);
+    let ctx = GensymContext::new(&module_path!(), &input.to_string());
     let input: DeriveInput = parse_macro_input!(input);
     let impl_data = match &input.data {
         Data::Struct(data) => DerivedImpl::for_struct(&input, data),

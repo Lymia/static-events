@@ -18,6 +18,5 @@ proc-macro = true
 lazy_static = "1.2"
 quote = "1.0"
 rand = "0.7"
-sha2 = "0.8"
 syn = { version = "1.0", features = ["extra-traits", "full"] }
 proc-macro2 = { version = "1.0", features = ["nightly"] }

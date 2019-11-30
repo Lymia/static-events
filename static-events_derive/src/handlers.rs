@@ -260,7 +260,7 @@ fn create_normal_handler(
     phase: &SynTokenStream, sig: &HandlerSig,
 ) -> SynTokenStream {
     let phantom = phantom.into_token_stream();
-    let ctx = ctx.derive(&phantom);
+    let ctx = ctx.derive(&phantom.to_string());
 
     let fn_async = ctx.gensym("async_handler");
     let existential = ctx.gensym("FutureTypeExistential");
@@ -422,7 +422,7 @@ fn mark_attrs_processed(method: &mut ImplItemMethod) {
 }
 
 pub fn events_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let ctx = GensymContext::new(&format_args!("({})({})", attr, item));
+    let ctx = GensymContext::new(&module_path!(), &format!("({})({})", attr, item));
     let mut impl_block = match parse::<ItemImpl>(item.clone()) {
         Ok(block) => block,
         Err(_) => {
