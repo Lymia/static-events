@@ -10,7 +10,7 @@ mod common;
 mod derive;
 mod handlers;
 
-#[proc_macro_derive(Events, attributes(subhandler, service))]
+#[proc_macro_derive(Events, attributes(subhandler, service, events))]
 pub fn derive_events(input: TokenStream) -> TokenStream {
     derive::derive_events(input)
 }

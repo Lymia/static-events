@@ -1,4 +1,5 @@
 use crate::common::*;
+use darling::*;
 use proc_macro::TokenStream;
 use proc_macro2::{TokenStream as SynTokenStream};
 use syn::*;
@@ -26,7 +27,8 @@ fn check_get_service_type(field: impl ToTokens) -> SynTokenStream {
 
 #[derive(Default)]
 struct FieldAttrs {
-    is_subhandler: bool, is_service: bool,
+    is_subhandler: bool,
+    is_service: bool,
 }
 impl FieldAttrs {
     fn from_attrs(attrs: &[Attribute]) -> FieldAttrs {
@@ -40,6 +42,15 @@ impl FieldAttrs {
         }
         tp
     }
+}
+
+#[derive(FromDeriveInput)]
+#[darling(attributes(events))]
+pub struct EventsAttrs {
+    ident: Ident,
+
+    #[darling(default)]
+    impl_on_external: Option<Ident>,
 }
 
 fn i_ident(i: usize) -> Ident {
@@ -137,15 +148,13 @@ impl DerivedImpl {
         }
     }
 
-    fn for_struct(input: &DeriveInput, fields: &DataStruct) -> DerivedImpl {
+    fn for_struct(ident: &Ident, fields: &DataStruct) -> DerivedImpl {
         let mut derived = Self::default();
-        let ident = &input.ident;
         derived.generate_arm_fields(quote! { #ident }, &fields.fields, true);
         derived
     }
-    fn for_enum(input: &DeriveInput, variants: &DataEnum) -> DerivedImpl {
+    fn for_enum(ident: &Ident, variants: &DataEnum) -> DerivedImpl {
         let mut derived = Self::default();
-        let ident = &input.ident;
         for variant in &variants.variants {
             let variant_ident = &variant.ident;
             derived.generate_arm_fields(quote! { #ident::#variant_ident }, &variant.fields, false);
@@ -153,7 +162,9 @@ impl DerivedImpl {
         derived
     }
 
-    fn make_impl(self, ctx: &GensymContext, input: &DeriveInput) -> SynTokenStream {
+    fn make_impl(
+        self, ctx: &GensymContext, name: &Ident, input: &DeriveInput,
+    ) -> SynTokenStream {
         let get_service_self = if FieldAttrs::from_attrs(&input.attrs).is_service {
             check_get_service_type(quote!(self))
         } else {
@@ -161,7 +172,6 @@ impl DerivedImpl {
         };
         let get_service_body = self.get_service_body;
 
-        let name = &input.ident;
         let (impl_bounds, ty_param, where_bounds) = input.generics.split_for_impl();
 
         let dist = Some(quote! { ::static_events::private::HandlerImplBlock });
@@ -250,9 +260,14 @@ impl DerivedImpl {
 pub fn derive_events(input: TokenStream) -> TokenStream {
     let ctx = GensymContext::new(&module_path!(), &input.to_string());
     let input: DeriveInput = parse_macro_input!(input);
+    let attrs: EventsAttrs = match EventsAttrs::from_derive_input(&input) {
+        Ok(attrs) => attrs,
+        Err(e) => return e.write_errors().into(),
+    };
+    let name = attrs.impl_on_external.as_ref().unwrap_or(&attrs.ident);
     let impl_data = match &input.data {
-        Data::Struct(data) => DerivedImpl::for_struct(&input, data),
-        Data::Enum(data) => DerivedImpl::for_enum(&input, data),
+        Data::Struct(data) => DerivedImpl::for_struct(name, data),
+        Data::Enum(data) => DerivedImpl::for_enum(name, data),
         Data::Union(_) => {
             input.span()
                 .unstable()
@@ -261,5 +276,5 @@ pub fn derive_events(input: TokenStream) -> TokenStream {
             return TokenStream::new()
         }
     };
-    TokenStream::from(impl_data.make_impl(&ctx, &input))
+    TokenStream::from(impl_data.make_impl(&ctx, name, &input))
 }

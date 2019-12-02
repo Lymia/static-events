@@ -84,7 +84,8 @@
 //! # #![feature(type_alias_impl_trait, async_await)]
 //! # use static_events::*;
 //! # struct MyEvent(u32); simple_event!(MyEvent, u32, 0);
-//! # #[derive(Events, Default)] struct MyEventHandler;
+//! # #[derive(Default)] struct MyEventHandler;
+//! # #[derive(Events)] #[events(impl_on_external = "MyEventHandler")] struct MyEventHandler2;
 //! # #[events_impl] impl MyEventHandler {
 //! #     #[event_handler] fn handle_event(ev: &MyEvent, i: &mut u32) {
 //! #         *i += ev.0;
