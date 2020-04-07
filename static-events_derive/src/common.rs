@@ -9,6 +9,11 @@ macro_rules! ident {
     ($($tts:tt)*) => { Ident::new(&format!($($tts)*), SynSpan::call_site()) }
 }
 
+/// Helper function for emitting compile errors.
+pub fn error<T>(span: SynSpan, message: impl Display) -> Result<T> {
+    Err(Error::new(span, &message.to_string()))
+}
+
 /// Helps create unique identifier names for various derives.
 pub struct GensymContext(u64);
 impl GensymContext {

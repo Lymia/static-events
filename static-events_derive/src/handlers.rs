@@ -1,8 +1,7 @@
 use crate::common::*;
 use proc_macro::TokenStream;
 use proc_macro2::{TokenStream as SynTokenStream, Span as SynSpan};
-use std::result::Result;
-use syn::*;
+use syn::{*, Result};
 use syn::spanned::Spanned;
 use quote::{quote, ToTokens};
 
@@ -41,7 +40,7 @@ impl HandlerArg {
         }
     }
 
-    fn check_reference_type(tp: &Type) -> Result<HandlerArg, ()> {
+    fn check_reference_type(tp: &Type) -> Result<HandlerArg> {
         match tp {
             Type::Paren(paren) => Self::check_reference_type(&paren.elem),
             Type::Group(group) => Self::check_reference_type(&group.elem),
@@ -53,32 +52,21 @@ impl HandlerArg {
             _ => Ok(HandlerArg::OtherParam((*tp).clone())),
         }
     }
-    fn check_any_type(tp: &Type) -> Result<HandlerArg, ()> {
+    fn check_any_type(tp: &Type) -> Result<HandlerArg> {
         match tp {
             Type::Reference(ref_tp) => Self::check_reference_type(&ref_tp.elem),
             Type::Paren(paren) => Self::check_any_type(&paren.elem),
             Type::Group(group) => Self::check_any_type(&group.elem),
-            _ => {
-                tp.span().unstable()
-                    .error("Event handlers must take parameters by reference.")
-                    .emit();
-                Err(())
-            }
+            _ => error(tp.span(), "Event handlers must take parameters by reference."),
         }
     }
 
-    fn from_param(param: &FnArg) -> Result<HandlerArg, ()> {
+    fn from_param(param: &FnArg) -> Result<HandlerArg> {
         match param {
             FnArg::Receiver(receiver) => if receiver.reference.is_none() {
-                param.span().unstable()
-                    .error("Event handlers may not take `self` by value.")
-                    .emit();
-                Err(())
+                error(param.span(), "Event handlers may not take `self` by value.")
             } else if receiver.mutability.is_some() {
-                param.span().unstable()
-                    .error("Event handlers may not take `self` by mutable reference.")
-                    .emit();
-                Err(())
+                error(param.span(), "Event handlers may not take `self` by mutable reference.")
             } else {
                 Ok(HandlerArg::SelfParam)
             },
@@ -102,13 +90,10 @@ struct HandlerSig {
     is_async: bool,
 }
 impl HandlerSig {
-    fn find_signature(method: &ImplItemMethod) -> Result<HandlerSig, ()> {
+    fn find_signature(method: &ImplItemMethod) -> Result<HandlerSig> {
         let sig = &method.sig;
         if sig.variadic.is_some() {
-            sig.span().unstable()
-                .error("Event handlers cannot be variadic.")
-                .emit();
-            return Err(())
+            error(sig.span(), "Event handlers cannot be variadic.")?;
         }
 
         let mut parsed_params = Vec::new();
@@ -137,19 +122,13 @@ impl HandlerSig {
         if let Some((HandlerArg::OtherParam(ty), _)) = params.next() {
             handler_sig.event_ty = ty;
         } else {
-            sig.span().unstable()
-                .error("No event parameter found for event handler.")
-                .emit();
-            return Err(())
+            error(sig.span(), "No event parameter found for event handler.")?;
         }
         if let Some((HandlerArg::OtherParam(_), _)) = params.peek() {
             handler_sig.state_param = Some(params.next().unwrap().1);
         }
         if let Some((_, span)) = params.next() {
-            span.unstable()
-                .error("Unexpected parameter in event handler signature.")
-                .emit();
-            return Err(())
+            error(span, "Unexpected parameter in event handler signature.")?;
         }
 
         Ok(handler_sig)
@@ -193,19 +172,13 @@ impl HandlerType {
             _ => false,
         }
     }
-    fn for_attr(attr: &Attribute) -> Result<Option<HandlerType>, ()> {
+    fn for_attr(attr: &Attribute) -> Result<Option<HandlerType>> {
         match last_path_segment(&attr.path).as_str() {
             "event_handler" => {
                 Ok(Some(HandlerType::EventHandler(if !attr.tokens.is_empty() {
                     match parse2::<TypeParen>(attr.tokens.clone()) {
                         Ok(tp) => tp.elem.into_token_stream(),
-                        Err(_) => {
-                            attr.span()
-                                .unstable()
-                                .error(format!("Could not parse #[event_handler] attribute."))
-                                .emit();
-                            return Err(())
-                        },
+                        Err(_) => error(attr.span(), "Error parsing #[event_handler] attribute.")?,
                     }
                 } else {
                     quote! { ::static_events::EvOnEvent }
@@ -225,22 +198,19 @@ enum MethodInfo {
     EventHandler { phase: SynTokenStream, sig: HandlerSig },
 }
 impl MethodInfo {
-    fn for_method(method: &ImplItemMethod) -> Result<Option<MethodInfo>, ()> {
+    fn for_method(method: &ImplItemMethod) -> Result<Option<MethodInfo>> {
         let mut handler_type: Option<HandlerType> = None;
         for attr in &method.attrs {
             if let Some(tp) = HandlerType::for_attr(attr)? {
                 if let Some(e_tp) = &handler_type {
-                    if e_tp.name() == tp.name() {
-                        attr.span().unstable()
-                            .error(format!("{} can only be used once.", tp.name()))
-                            .emit();
-                    } else {
-                        attr.span().unstable()
-                            .error(format!("{} cannot be used with {}.",
-                                           tp.name(), e_tp.name()))
-                            .emit();
-                    }
-                    return Err(())
+                    error(
+                        attr.span(),
+                        if e_tp.name() == tp.name() {
+                            format!("{} can only be used once.", tp.name())
+                        } else {
+                            format!("{} cannot be used with {}.", tp.name(), e_tp.name())
+                        }
+                    )?;
                 }
                 handler_type = Some(tp);
             }
@@ -434,7 +404,7 @@ pub fn events_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     let mut handlers = Vec::new();
-    let mut has_errors = false;
+    let mut errors = Vec::new();
 
     for item in &mut impl_block.items {
         match item {
@@ -442,15 +412,19 @@ pub fn events_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
                 match MethodInfo::for_method(method) {
                     Ok(Some(handler)) => handlers.push(handler),
                     Ok(None) => { }
-                    Err(()) => has_errors = true,
+                    Err(e) => errors.push(e),
                 }
                 mark_attrs_processed(method);
             },
             _ => { }
         }
     }
-    if has_errors {
-        return TokenStream::from(quote! { #impl_block })
+    if !errors.is_empty() {
+        let errors: Vec<_> = errors.into_iter().map(|x| x.to_compile_error()).collect();
+        return TokenStream::from(quote! {
+            #(#errors)*
+            #impl_block
+        })
     }
 
     let const_block = create_impls(&ctx, &impl_block.self_ty, &impl_block.generics, &handlers);

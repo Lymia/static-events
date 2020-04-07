@@ -20,4 +20,4 @@ lazy_static = "1.2"
 quote = "1.0"
 rand = "0.7"
 syn = { version = "1.0", features = ["extra-traits", "full"] }
-proc-macro2 = { version = "1.0", features = ["nightly"] }
+proc-macro2 = "1.0"
