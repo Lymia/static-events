@@ -2,7 +2,7 @@ use crate::common::*;
 use darling::*;
 use proc_macro::TokenStream;
 use proc_macro2::{TokenStream as SynTokenStream};
-use syn::{*, Result};
+use syn::{*, Error};
 use syn::export::Span;
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
@@ -269,9 +269,9 @@ pub fn derive_events(input: TokenStream) -> TokenStream {
         Data::Struct(data) => DerivedImpl::for_struct(name, data),
         Data::Enum(data) => DerivedImpl::for_enum(name, data),
         Data::Union(_) => {
-            let e: Result<()> =
-                error(input.span(), "EventDispatch can only be derived on a struct or enum.");
-            return e.unwrap_err().to_compile_error().into();
+            return Error::new(
+                input.span(), "EventDispatch can only be derived on a struct or enum.",
+            ).to_compile_error().into()
         }
     };
     TokenStream::from(impl_data.make_impl(&ctx, name, &input))

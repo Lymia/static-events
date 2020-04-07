@@ -1,16 +1,15 @@
-use proc_macro::{TokenStream, Span};
-use proc_macro2::{Ident, Span as SynSpan, TokenStream as SynTokenStream};
+use proc_macro2::{Ident, Span, TokenStream as SynTokenStream};
 use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 use syn::*;
 use quote::*;
 
 macro_rules! ident {
-    ($($tts:tt)*) => { Ident::new(&format!($($tts)*), SynSpan::call_site()) }
+    ($($tts:tt)*) => { Ident::new(&format!($($tts)*), Span::call_site()) }
 }
 
 /// Helper function for emitting compile errors.
-pub fn error<T>(span: SynSpan, message: impl Display) -> Result<T> {
+pub fn error<T>(span: Span, message: impl Display) -> Result<T> {
     Err(Error::new(span, &message.to_string()))
 }
 
@@ -90,7 +89,7 @@ pub fn strip_lifetimes(a: &Generics) -> Generics {
 }
 
 /// Creates a span for an entire TokenStream.
-pub fn stream_span(attr: TokenStream) -> Span {
+pub fn stream_span(attr: SynTokenStream) -> Span {
     let head_span = attr.clone().into_iter().next().unwrap().span();
     let tail_span = attr.into_iter().last().unwrap().span();
     head_span.join(tail_span).unwrap()

@@ -396,10 +396,9 @@ pub fn events_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut impl_block = match parse::<ItemImpl>(item.clone()) {
         Ok(block) => block,
         Err(_) => {
-            stream_span(item.clone())
-                .error("#[events_impl] can only be used on impl blocks.")
-                .emit();
-            return item
+            let item: SynTokenStream = item.into();
+            let e = Error::new(item.span(), "#[events_impl] can only be used on impl blocks.");
+            return e.to_compile_error().into();
         },
     };
 

@@ -1,10 +1,11 @@
-#![feature(proc_macro_diagnostic, proc_macro_span, drain_filter)]
 #![recursion_limit="256"]
 
 extern crate proc_macro;
 
 use lazy_static::*;
-use proc_macro::{TokenStream, TokenTree};
+use proc_macro::TokenStream;
+use proc_macro2::{TokenStream as SynTokenStream, TokenTree};
+use quote::*;
 
 mod common;
 mod derive;
@@ -24,10 +25,12 @@ lazy_static! {
     static ref RAND_IDENT: String = format!("event_handler_ok_{}", rand::random::<u64>());
 }
 
-fn smart_err_attr(attr: TokenStream, item: TokenStream, error: &str) {
-    common::stream_span(if attr.is_empty() { item } else { attr }).error(error).emit()
+fn smart_err_attr(attr: SynTokenStream, item: SynTokenStream, error: &str) -> SynTokenStream {
+    syn::Error::new(
+        common::stream_span(if attr.is_empty() { item } else { attr }), error,
+    ).to_compile_error()
 }
-fn is_handler_valid(attr: TokenStream) -> bool {
+fn is_handler_valid(attr: SynTokenStream) -> bool {
     if attr.clone().into_iter().count() != 1 { return false }
     if let Some(TokenTree::Ident(ident)) = attr.clone().into_iter().next() {
         ident.to_string() == *RAND_IDENT
@@ -35,15 +38,23 @@ fn is_handler_valid(attr: TokenStream) -> bool {
         false
     }
 }
-fn warn_helper_attribute(name: &str, attr: TokenStream, item: TokenStream) {
+fn warn_helper_attribute(
+    name: &str, attr: SynTokenStream, item: SynTokenStream,
+) -> SynTokenStream {
     if !is_handler_valid(attr.clone()) {
         smart_err_attr(attr, item,
                        &format!("{} can only be used inside #[events_impl] blocks.", name))
+    } else {
+        SynTokenStream::new()
     }
 }
 
 #[proc_macro_attribute]
 pub fn event_handler(attr: TokenStream, item: TokenStream) -> TokenStream {
-    warn_helper_attribute("#[event_handler]", attr, item.clone());
-    item
+    let item: SynTokenStream = item.into();
+    let warn = warn_helper_attribute("#[event_handler]", attr.into(), item.clone());
+    (quote! {
+        #warn
+        #item
+    }).into()
 }
