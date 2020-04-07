@@ -9,7 +9,6 @@ use std::task::{Poll, Context};
 #[doc(hidden)] pub use futures::executor::block_on;
 #[doc(hidden)] pub use std::result::Result;
 
-// TODO: Make NullFuture uninhabited when rust #59972 is solved.
 // TODO: Fix block_on to work with running asynchronous stuff (internal thread pool?)
 
 #[inline(never)]
@@ -32,7 +31,7 @@ pub fn async_already_done_error() -> ! {
 
 /// A future of which no instances should exist. Used as a the future type when no async future
 /// is defined.
-pub enum NullFuture { }
+pub struct NullFuture;
 impl Future for NullFuture {
     type Output = EventResult;
 
@@ -86,6 +85,7 @@ impl <
     ) -> EventResult {
         self.on_phase(target, ev, state)
     }
+
     type FutureType = <Self as EventHandler<'a, E, Ev, P, D>>::FutureType;
     #[inline(always)]
     fn on_phase_async(
@@ -121,7 +121,7 @@ pub fn on_phase<
 #[inline(always)]
 pub fn on_phase_async<'a, T: Events, E: Events, Ev: Event + 'a, P: EventPhase + 'a, D: 'a>(
     this: &'a T, target: &'a Handler<E>, ev: &'a mut Ev, state: &'a mut Ev::State,
-) -> impl Future<Output = EventResult> + 'a {
+) -> <T as UniversalEventHandler<'a, E, Ev, P, D>>::FutureType {
     if is_implemented::<'a, T, E, Ev, P, D>() && is_async::<'a, T, E, Ev, P, D>() {
         <T as UniversalEventHandler<'a, E, Ev, P, D>>::on_phase_async(this, target, ev, state)
     } else {
