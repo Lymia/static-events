@@ -1,5 +1,4 @@
-#![feature(const_fn, nll, specialization)]
-#![feature(type_alias_impl_trait, doc_cfg)]
+#![feature(const_fn, specialization, type_alias_impl_trait)]
 
 // TODO: Implement filtering of some kind on events, and state between phases.
 // TODO: Document how to set the phase of an event handler.
