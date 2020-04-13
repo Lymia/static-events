@@ -162,9 +162,7 @@ impl DerivedImpl {
         derived
     }
 
-    fn make_impl(
-        self, ctx: &GensymContext, name: &Ident, input: &DeriveInput,
-    ) -> SynTokenStream {
+    fn make_impl(self, name: &Ident, input: &DeriveInput) -> SynTokenStream {
         let get_service_self = if FieldAttrs::from_attrs(&input.attrs).is_service {
             check_get_service_type(quote!(self))
         } else {
@@ -178,8 +176,9 @@ impl DerivedImpl {
         let event_handler = if self.subhandlers_exist {
             let mut common = Vec::new();
             common.push(CallStage::new(quote! { _this }, quote! { #name #ty_param }, dist));
-            make_merge_event_handler(&ctx, EventHandlerTarget::Ident(name),
-                                     &input.generics, None, self.arms, common)
+            make_merge_event_handler(
+                EventHandlerTarget::Ident(name), &input.generics, None, self.arms, common,
+            )
         } else {
             let event_generics_raw = quote! {
                 '__EventLifetime,
@@ -195,9 +194,8 @@ impl DerivedImpl {
             let is_implemented_expr = is_implemented(quote!(Self), dist.clone());
             let is_async_expr = is_async(quote!(Self), dist.clone());
 
-            let existential_ty = ctx.gensym("ExistentialFuture");
             quote! {
-                type #existential_ty #handler_impl_bounds #handler_where_bounds =
+                type __PassthroughEventFut #handler_impl_bounds #handler_where_bounds =
                     impl ::std::future::Future<Output = ::static_events::EventResult> +
                     '__EventLifetime;
                 impl #handler_impl_bounds ::static_events::handlers::EventHandler<
@@ -219,7 +217,7 @@ impl DerivedImpl {
                         >(self, target, ev, state)
                     }
 
-                    type FutureType = #existential_ty #handler_ty_param;
+                    type FutureType = __PassthroughEventFut #handler_ty_param;
 
                     #[inline]
                     fn on_phase_async (
@@ -227,7 +225,7 @@ impl DerivedImpl {
                         target: &'__EventLifetime ::static_events::Handler<__EventDispatch>,
                         ev: &'__EventLifetime mut __EventType,
                         state: &'__EventLifetime mut __EventType::State,
-                    ) -> #existential_ty #handler_ty_param {
+                    ) -> __PassthroughEventFut #handler_ty_param {
                         ::static_events::private::on_phase_async::<
                             '__EventLifetime, Self, __EventDispatch, __EventType, __EventPhase,
                             ::static_events::private::HandlerImplBlock,
@@ -237,10 +235,9 @@ impl DerivedImpl {
             }
         };
 
-        let impl_name = ctx.gensym("DeriveWrapper");
         quote! {
             #[allow(non_snake_case)]
-            const #impl_name: () = {
+            const _: () = {
                 impl #impl_bounds ::static_events::Events for #name #ty_param #where_bounds {
                     fn get_service<__DowncastTarget>(&self) -> Option<&__DowncastTarget> {
                         #get_service_self
@@ -250,15 +247,12 @@ impl DerivedImpl {
                 }
 
                 #event_handler
-
-                ()
             };
         }
     }
 }
 
 pub fn derive_events(input: TokenStream) -> TokenStream {
-    let ctx = GensymContext::new(&module_path!(), &input.to_string());
     let input: DeriveInput = parse_macro_input!(input);
     let attrs: EventsAttrs = match EventsAttrs::from_derive_input(&input) {
         Ok(attrs) => attrs,
@@ -274,5 +268,5 @@ pub fn derive_events(input: TokenStream) -> TokenStream {
             ).to_compile_error().into()
         }
     };
-    TokenStream::from(impl_data.make_impl(&ctx, name, &input))
+    TokenStream::from(impl_data.make_impl(name, &input))
 }

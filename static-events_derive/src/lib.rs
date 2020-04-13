@@ -7,7 +7,9 @@ use proc_macro::TokenStream;
 use proc_macro2::{TokenStream as SynTokenStream, TokenTree};
 use quote::*;
 
+#[macro_use]
 mod common;
+
 mod derive;
 mod handlers;
 

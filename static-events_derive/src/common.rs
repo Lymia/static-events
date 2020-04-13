@@ -1,40 +1,15 @@
 use proc_macro2::{Ident, Span, TokenStream as SynTokenStream};
 use std::fmt::Display;
-use std::hash::{Hash, Hasher};
 use syn::*;
 use quote::*;
 
 macro_rules! ident {
-    ($($tts:tt)*) => { Ident::new(&format!($($tts)*), Span::call_site()) }
+    ($($tts:tt)*) => { Ident::new(&format!($($tts)*), ::proc_macro2::Span::call_site()) }
 }
 
 /// Helper function for emitting compile errors.
 pub fn error<T>(span: Span, message: impl Display) -> Result<T> {
     Err(Error::new(span, &message.to_string()))
-}
-
-/// Helps create unique identifier names for various derives.
-pub struct GensymContext(u64);
-impl GensymContext {
-    pub fn new(disc: &impl Hash, target: &impl Hash) -> GensymContext {
-        let mut hasher = ::std::collections::hash_map::DefaultHasher::new();
-        Hash::hash(&disc, &mut hasher);
-        Hash::hash(&target, &mut hasher);
-        GensymContext(hasher.finish())
-    }
-    pub fn derive(&self, target: &impl Hash) -> GensymContext {
-        let mut hasher = ::std::collections::hash_map::DefaultHasher::new();
-        hasher.write_u64(self.0);
-        Hash::hash(&target, &mut hasher);
-        GensymContext(hasher.finish())
-    }
-
-    pub fn gensym(&self, purpose: &str) -> Ident {
-        ident!("{}_{:016x}", purpose, self.0)
-    }
-    pub fn gensym_id(&self, purpose: &str, id: impl Display) -> Ident {
-        ident!("{}_{}_{:016x}", purpose, id, self.0)
-    }
 }
 
 pub fn last_path_segment(path: &Path) -> String {
@@ -161,11 +136,10 @@ fn make_call(
     }
 }
 pub fn make_merge_event_handler(
-    ctx: &GensymContext, name: EventHandlerTarget, item_generics: &Generics,
+    name: EventHandlerTarget, item_generics: &Generics,
     distinguisher: Option<SynTokenStream>, mut groups: Vec<CallGroup>, common: Vec<CallStage>,
 ) -> SynTokenStream {
     let distinguisher = unwrap_distinguisher(distinguisher);
-    let ctx = ctx.derive(&distinguisher.to_string());
 
     let event_generics_raw = quote! {
         '__EventLifetime,
@@ -193,9 +167,6 @@ pub fn make_merge_event_handler(
     let handler_ty = quote! { ::static_events::handlers::EventHandler<
         '__EventLifetime, __EventDispatch, __EventType, __EventPhase, #distinguisher,
     > };
-
-    let async_fn = ctx.gensym("async_fn");
-    let existential_ty = ctx.gensym("ExistentialType");
 
     let mut is_implemented_expr = quote! { false };
     let mut is_async_expr = quote! { false };
@@ -255,7 +226,7 @@ pub fn make_merge_event_handler(
     }
 
     quote! {
-        async fn #async_fn #handler_impl_bounds (
+        async fn __merge_events_async_wrapper #handler_impl_bounds (
             _this: &#name,
             _target: &'__EventLifetime ::static_events::Handler<__EventDispatch>,
             _ev: &'__EventLifetime mut __EventType,
@@ -268,7 +239,7 @@ pub fn make_merge_event_handler(
             ::static_events::EvOk
         }
 
-        type #existential_ty #handler_impl_bounds #handler_where_bounds =
+        type __MergeEventsWrapperFut #handler_impl_bounds #handler_where_bounds =
                     impl ::std::future::Future<Output = ::static_events::EventResult> +
                     '__EventLifetime;
 
@@ -291,7 +262,7 @@ pub fn make_merge_event_handler(
                 ::static_events::EvOk
             }
 
-            type FutureType = #existential_ty #handler_ty_param;
+            type FutureType = __MergeEventsWrapperFut #handler_ty_param;
 
             #[inline]
             fn on_phase_async(
@@ -299,8 +270,8 @@ pub fn make_merge_event_handler(
                 target: &'__EventLifetime ::static_events::Handler<__EventDispatch>,
                 ev: &'__EventLifetime mut __EventType,
                 state: &'__EventLifetime mut __EventType::State,
-            ) -> #existential_ty #handler_ty_param {
-                #async_fn #no_lt_turbofish (self, target, ev, state)
+            ) -> __MergeEventsWrapperFut #handler_ty_param {
+                __merge_events_async_wrapper #no_lt_turbofish (self, target, ev, state)
             }
         }
     }
