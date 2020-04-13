@@ -1,8 +1,10 @@
+use proc_macro::TokenStream;
 use proc_macro2::{Ident, Span, TokenStream as SynTokenStream};
 use std::fmt::Display;
 use syn::*;
 use quote::*;
 
+/// Creates an identifier with a format-like syntax.
 macro_rules! ident {
     ($($tts:tt)*) => { Ident::new(&format!($($tts)*), ::proc_macro2::Span::call_site()) }
 }
@@ -12,10 +14,77 @@ pub fn error<T>(span: Span, message: impl Display) -> Result<T> {
     Err(Error::new(span, &message.to_string()))
 }
 
+/// Helper function for matching the last element of a path.
 pub fn last_path_segment(path: &Path) -> String {
     (&path.segments).into_iter().last().expect("Empty path?").ident.to_string()
 }
 
+/// Helpers for parsing interior attributes in the outer block.
+const ATTR_OK_STR: &str = concat!(
+    "(If you include this string in your crate, you are doing a bad, unstable thing.) ",
+    "__",
+    env!("CARGO_PKG_NAME"),
+    "_attr_ok_2e72dd274be94c5e85063900550c326d_",
+    env!("CARGO_PKG_VERSION"),
+);
+
+fn smart_err_attr(attr: SynTokenStream, item: SynTokenStream, error: &str) -> SynTokenStream {
+    syn::Error::new(
+        stream_span(if attr.is_empty() { item } else { attr }), error,
+    ).to_compile_error()
+}
+fn is_handler_valid(attr: SynTokenStream) -> bool {
+    if attr.clone().into_iter().count() != 1 { return false }
+    parse2::<Lit>(attr).ok()
+        .map(|x| match x {
+            Lit::Str(s) => s.value() == ATTR_OK_STR,
+            _ => false,
+        })
+        .unwrap_or(false)
+}
+fn err_helper_attribute(
+    error_str: &str, attr: SynTokenStream, item: SynTokenStream,
+) -> SynTokenStream {
+    if !is_handler_valid(attr.clone()) {
+        smart_err_attr(attr, item, error_str)
+    } else {
+        SynTokenStream::new()
+    }
+}
+pub fn check_attr(error_str: &str, attr: TokenStream, item: TokenStream) -> TokenStream {
+    let item: SynTokenStream = item.into();
+    let error = err_helper_attribute(error_str, attr.into(), item.clone());
+    (quote! {
+        #error
+        #item
+    }).into()
+}
+
+macro_rules! derived_attr {
+    (@error_str ($($head:tt)*) $inside:ident,) => {
+        concat!($($head)* "#[", stringify!($inside), "]")
+    };
+    (@error_str ($($head:tt)*) $first:ident, $last:ident) => {
+        concat!($($head)* "#[", stringify!($first), "], or #[", stringify!($last), "]")
+    };
+    (@error_str ($($head:tt)*) $inside:ident, $($rest:ident,)*) => {
+        derived_attr!(@error_str ("#[", stringify!($inside), "], ",) $($rest,)*)
+    };
+    ($event_name:ident, $($inside:ident),* $(,)?) => {
+        #[proc_macro_attribute]
+        pub fn $event_name(attr: TokenStream, item: TokenStream) -> TokenStream {
+            const ERROR_STR: &str = derived_attr!(@error_str () $($inside,)*);
+            crate::common::check_attr(ERROR_STR, attr, item)
+        }
+    };
+}
+
+/// Marks an attribute as having been successfully processed.
+pub fn mark_attribute_processed(attr: &mut Attribute) {
+    attr.tokens = quote! { (#ATTR_OK_STR) }.into();
+}
+
+/// Parses generics from a token.
 pub fn generics(a: impl ToTokens) -> Generics {
     parse2::<Generics>(quote! { < #a > }).unwrap()
 }
