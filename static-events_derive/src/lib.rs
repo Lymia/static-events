@@ -5,8 +5,9 @@ extern crate proc_macro;
 use proc_macro::TokenStream;
 
 #[macro_use]
-mod common;
+mod utils;
 
+mod common;
 mod derive;
 mod handlers;
 
