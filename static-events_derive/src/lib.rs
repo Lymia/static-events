@@ -2,7 +2,6 @@
 
 extern crate proc_macro;
 
-use lazy_static::*;
 use proc_macro::TokenStream;
 use proc_macro2::{TokenStream as SynTokenStream, TokenTree};
 use quote::*;
@@ -23,9 +22,14 @@ pub fn events_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
     handlers::events_impl(attr, item)
 }
 
-lazy_static! {
-    static ref RAND_IDENT: String = format!("event_handler_ok_{}", rand::random::<u64>());
-}
+const ATTR_OK_STR: &str = concat!(
+    "__event_handler_ok_2e72dd274be94c5e85063900550c326d_",
+    env!("CARGO_PKG_VERSION_MAJOR"),
+    "_",
+    env!("CARGO_PKG_VERSION_MINOR"),
+    "_",
+    env!("CARGO_PKG_VERSION_PATCH"),
+);
 
 fn smart_err_attr(attr: SynTokenStream, item: SynTokenStream, error: &str) -> SynTokenStream {
     syn::Error::new(
@@ -35,7 +39,7 @@ fn smart_err_attr(attr: SynTokenStream, item: SynTokenStream, error: &str) -> Sy
 fn is_handler_valid(attr: SynTokenStream) -> bool {
     if attr.clone().into_iter().count() != 1 { return false }
     if let Some(TokenTree::Ident(ident)) = attr.clone().into_iter().next() {
-        ident.to_string() == *RAND_IDENT
+        ident.to_string() == ATTR_OK_STR
     } else {
         false
     }
@@ -51,12 +55,18 @@ fn warn_helper_attribute(
     }
 }
 
-#[proc_macro_attribute]
-pub fn event_handler(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let item: SynTokenStream = item.into();
-    let warn = warn_helper_attribute("#[event_handler]", attr.into(), item.clone());
-    (quote! {
-        #warn
-        #item
-    }).into()
+macro_rules! derived_attr {
+    ($event_name:ident) => {
+        #[proc_macro_attribute]
+        pub fn $event_name(attr: TokenStream, item: TokenStream) -> TokenStream {
+            let item: SynTokenStream = item.into();
+            let attr_str = concat!("#[", stringify!($event_name),"]");
+            let warn = warn_helper_attribute(attr_str, attr.into(), item.clone());
+            (quote! {
+                #warn
+                #item
+            }).into()
+        }
+    }
 }
+derived_attr!(event_handler);

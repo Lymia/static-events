@@ -363,7 +363,7 @@ fn create_impls(
 }
 
 fn mark_attrs_processed(method: &mut ImplItemMethod) {
-    let ident = Ident::new(&crate::RAND_IDENT, SynSpan::call_site());
+    let ident = Ident::new(crate::ATTR_OK_STR, SynSpan::call_site());
     for attr in &mut method.attrs {
         if HandlerType::is_attr(attr) {
             attr.tokens = quote! { (#ident) };
