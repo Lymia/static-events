@@ -10,7 +10,7 @@
 //! similarily compile down to a relatively optimized future
 //!
 //! This crate relies on many unstable features, and can only be used on nightly versions of Rust.
-//! It currently requires the following features:
+//! It currently requires the following feature on the user crate:
 //!
 //! ```
 //! #![feature(type_alias_impl_trait)]
