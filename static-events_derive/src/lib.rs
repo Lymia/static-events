@@ -1,24 +1,14 @@
-#![recursion_limit="256"]
-
-extern crate proc_macro;
-
 use proc_macro::TokenStream;
-
-#[macro_use]
-mod utils;
-
-mod common;
-mod derive;
-mod handlers;
+use static_events_internals::*;
 
 #[proc_macro_derive(Events, attributes(subhandler, service, events))]
 pub fn derive_events(input: TokenStream) -> TokenStream {
-    derive::derive_events(input)
+    try_syn!(DeriveStaticEvents::from_tokens_raw(input)).generate().into()
 }
 
 #[proc_macro_attribute]
-pub fn events_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
-    handlers::events_impl(attr, item)
+pub fn events_impl(_: TokenStream, item: TokenStream) -> TokenStream {
+    try_syn!(EventsImplAttr::from_tokens_raw(item)).generate().into()
 }
 
 derived_attr!(event_handler, events_impl);

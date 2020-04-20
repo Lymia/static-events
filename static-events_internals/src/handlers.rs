@@ -1,8 +1,8 @@
 use crate::common::*;
+use crate::errors::{Error, Result};
 use crate::utils::*;
-use proc_macro::TokenStream;
 use proc_macro2::{TokenStream as SynTokenStream, Span as SynSpan};
-use syn::{*, Result};
+use syn::*;
 use syn::spanned::Spanned;
 use quote::{quote, ToTokens};
 
@@ -328,7 +328,8 @@ fn create_normal_handler(
     })
 }
 fn create_impls(
-    self_ty: &Type, impl_generics: &Generics, methods: &[MethodInfo],
+    self_ty: &Type, impl_generics: &Generics,
+    methods: &[MethodInfo], synthetic_methods: &[ImplItemMethod],
 ) -> SynTokenStream {
     let mut impls = SynTokenStream::new();
     let mut stages = Vec::new();
@@ -344,6 +345,18 @@ fn create_impls(
             }
         }
     }
+
+    let (impl_bounds, _, impl_where_bounds) = impl_generics.split_for_impl();
+    let synthetic_methods = if synthetic_methods.is_empty() {
+        quote! { }
+    } else {
+        quote! {
+            impl #impl_bounds #self_ty #impl_where_bounds {
+                #(#synthetic_methods)*
+            }
+        }
+    };
+
     let group = CallGroup::new(quote!(_), stages);
     if methods.len() > 1 {
         impls.extend(
@@ -359,6 +372,7 @@ fn create_impls(
         #[allow(non_snake_case)]
         const _: () = {
             #impls
+            #synthetic_methods
         };
     }
 }
@@ -371,43 +385,91 @@ fn mark_attrs_processed(method: &mut ImplItemMethod) {
     }
 }
 
-pub fn events_impl(_: TokenStream, item: TokenStream) -> TokenStream {
-    let mut impl_block = match parse::<ItemImpl>(item.clone()) {
-        Ok(block) => block,
-        Err(_) => {
-            let item: SynTokenStream = item.into();
-            let e = Error::new(item.span(), "#[events_impl] can only be used on impl blocks.");
-            return e.to_compile_error().into();
-        },
-    };
+/// Contains the implementation for `#[events_impl]`.
+pub struct EventsImplAttr {
+    self_ty: Type,
+    impl_generics: Generics,
+    methods: Vec<MethodInfo>,
+    synthetic_methods: Vec<ImplItemMethod>,
+    emit_input: bool,
+    impl_input: ItemImpl,
+}
+impl EventsImplAttr {
+    /// Parses an impl block.
+    ///
+    /// It takes a mutable reference to the impl block, as it may mark some attributes processed.
+    pub fn new(impl_block: &mut ItemImpl) -> Result<Self> {
+        let mut handlers = Vec::new();
+        let mut errors = Error::empty();
 
-    let mut handlers = Vec::new();
-    let mut errors = Vec::new();
-
-    for item in &mut impl_block.items {
-        match item {
-            ImplItem::Method(method) => {
-                match MethodInfo::for_method(method) {
-                    Ok(Some(handler)) => handlers.push(handler),
-                    Ok(None) => { }
-                    Err(e) => errors.push(e),
-                }
-                mark_attrs_processed(method);
-            },
-            _ => { }
+        for item in &mut impl_block.items {
+            match item {
+                ImplItem::Method(method) => {
+                    match MethodInfo::for_method(method) {
+                        Ok(Some(handler)) => handlers.push(handler),
+                        Ok(None) => { }
+                        Err(e) => errors = errors.combine(e),
+                    }
+                    mark_attrs_processed(method);
+                },
+                _ => { }
+            }
+        }
+        if !errors.is_empty() {
+            Err(errors)
+        } else {
+            Ok(EventsImplAttr {
+                self_ty: (*impl_block.self_ty).clone(),
+                impl_generics: impl_block.generics.clone(),
+                methods: handlers,
+                synthetic_methods: Vec::new(),
+                emit_input: false,
+                impl_input: impl_block.clone(),
+            })
         }
     }
-    if !errors.is_empty() {
-        let errors: Vec<_> = errors.into_iter().map(|x| x.to_compile_error()).collect();
-        return TokenStream::from(quote! {
-            #(#errors)*
-            #impl_block
-        })
+
+    fn mark_emit_input(mut self) -> Self {
+        self.emit_input = true;
+        self
     }
 
-    let const_block = create_impls(&impl_block.self_ty, &impl_block.generics, &handlers);
-    TokenStream::from(quote! {
-        #impl_block
-        #const_block
-    })
+    /// Parses a token stream.
+    pub fn from_tokens(toks: impl ToTokens) -> Result<Self> {
+        Ok(Self::new(&mut parse2(toks.into_token_stream())?)?.mark_emit_input())
+    }
+
+    /// Parses a token stream.
+    pub fn from_tokens_raw(toks: proc_macro::TokenStream) -> Result<Self> {
+        Ok(Self::new(&mut parse(toks)?)?.mark_emit_input())
+    }
+
+    /// Processes an synthetic method, emitting it alongside the method's other impls.
+    pub fn process_synthetic_method_obj(&mut self, method: impl ToTokens) -> Result<()> {
+        let mut method: ImplItemMethod = parse2(method.into_token_stream())?;
+        match MethodInfo::for_method(&mut method) {
+            Ok(Some(handler)) => self.methods.push(handler),
+            Ok(None) => { }
+            Err(e) => return Err(e),
+        }
+        mark_attrs_processed(&mut method);
+        self.synthetic_methods.push(method);
+        Ok(())
+    }
+
+    /// Generates an impl block for the event handler implementation.
+    pub fn generate(self) -> SynTokenStream {
+        let impls = create_impls(
+            &self.self_ty, &self.impl_generics, &self.methods, &self.synthetic_methods,
+        );
+        if self.emit_input {
+            let input = self.impl_input;
+            quote! {
+                #input
+                #impls
+            }
+        } else {
+            impls
+        }
+    }
 }

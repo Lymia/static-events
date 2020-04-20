@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["Lymia Aluysia <lymia@lymiahugs.com>"]
 edition = "2018"
 
-description = "An internal helper crate for static-events."
+description = "An internal helper crate for static-events. Not public API."
 
 documentation = "https://docs.rs/static-events/"
 repository = "https://github.com/Lymia/static-events"
@@ -15,7 +15,4 @@ license = "MIT/Apache-2.0"
 proc-macro = true
 
 [dependencies]
-darling = "0.10.2"
-quote = "1.0"
-syn = { version = "1.0", features = ["extra-traits", "full"] }
-proc-macro2 = "1.0"
+static-events_internals = { version = "0.1.0", path = "../static-events_internals" }

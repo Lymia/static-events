@@ -1,3 +1,6 @@
+//! Various helper methods that may help with static-events based procedural derives.
+
+use crate::errors::{Error, Result};
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as SynTokenStream};
 use std::fmt::Display;
@@ -5,16 +8,17 @@ use syn::*;
 use quote::*;
 
 /// Creates an identifier with a format-like syntax.
+#[macro_export]
 macro_rules! ident {
     ($($tts:tt)*) => { Ident::new(&format!($($tts)*), ::proc_macro2::Span::call_site()) }
 }
 
-/// Helper function for emitting compile errors.
+/// Emits a `syn` based compile error.
 pub fn error<T>(span: Span, message: impl Display) -> Result<T> {
     Err(Error::new(span, &message.to_string()))
 }
 
-/// Helper function for matching the last element of a path.
+/// Returns the actual type name of a path as a string.
 pub fn last_path_segment(path: &Path) -> String {
     (&path.segments).into_iter().last().expect("Empty path?").ident.to_string()
 }
@@ -51,6 +55,11 @@ fn err_helper_attribute(
         SynTokenStream::new()
     }
 }
+
+/// Checks if an attribute has been processed via `mark_attribute_processed`.
+///
+/// Not public API, use [`derived_attr!`] instead.
+#[doc(hidden)]
 pub fn check_attr(error_str: &str, attr: TokenStream, item: TokenStream) -> TokenStream {
     let item: SynTokenStream = item.into();
     let error = err_helper_attribute(error_str, attr.into(), item.clone());
@@ -60,31 +69,58 @@ pub fn check_attr(error_str: &str, attr: TokenStream, item: TokenStream) -> Toke
     }).into()
 }
 
+/// Creates a macro attribute that exists only to be processed by another macro attribute.
+///
+/// The macro will result in an error if it's used outside the macro. The macro must be
+/// marked with [`mark_attribute_processed`] once processed to suppress this error.
+#[macro_export]
 macro_rules! derived_attr {
-    (@error_str ($($head:tt)*) $inside:ident,) => {
-        concat!($($head)* "#[", stringify!($inside), "]")
+    (@error_str $attr:ident ($($head:tt)*) $inside:ident,) => {
+        concat!(
+            "#[", stringify!($attr), "] may only be used in a ",
+            $($head)* "#[", stringify!($inside), "]",
+            " block.",
+        )
     };
-    (@error_str ($($head:tt)*) $first:ident, $last:ident) => {
-        concat!($($head)* "#[", stringify!($first), "], or #[", stringify!($last), "]")
+    (@error_str $attr:ident ($($head:tt)*) $first:ident, $last:ident) => {
+        concat!(
+            "#[", stringify!($attr), "] may only be used in a ",
+            $($head)* "#[", stringify!($first), "], or #[", stringify!($last), "]",
+            " block.",
+        )
     };
-    (@error_str ($($head:tt)*) $inside:ident, $($rest:ident,)*) => {
+    (@error_str $attr:ident ($($head:tt)*) $inside:ident, $($rest:ident,)*) => {
         derived_attr!(@error_str ("#[", stringify!($inside), "], ",) $($rest,)*)
     };
     ($event_name:ident, $($inside:ident),* $(,)?) => {
         #[proc_macro_attribute]
         pub fn $event_name(attr: TokenStream, item: TokenStream) -> TokenStream {
-            const ERROR_STR: &str = derived_attr!(@error_str () $($inside,)*);
+            const ERROR_STR: &str = derived_attr!(@error_str $event_name () $($inside,)*);
             crate::utils::check_attr(ERROR_STR, attr, item)
         }
     };
 }
 
 /// Marks an attribute as having been successfully processed.
+///
+/// See [`derived_attr!`].
 pub fn mark_attribute_processed(attr: &mut Attribute) {
     attr.tokens = quote! { (#ATTR_OK_STR) }.into();
 }
 
-/// Parses generics from a token.
+/// Creates generics from a token stream.
+///
+/// # Example
+///
+/// ```rust
+/// # use static_events_internals::utils::generics;
+/// # use syn::Generics;
+/// # use quote::*;
+/// let generics: Generics = generics(quote! {
+///     A, B: Copy,
+/// });
+/// # drop(generics);
+/// ```
 pub fn generics(a: impl ToTokens) -> Generics {
     parse2::<Generics>(quote! { < #a > }).unwrap()
 }

@@ -1,9 +1,9 @@
 use crate::common::*;
+use crate::errors::Result;
 use crate::utils::*;
 use darling::*;
-use proc_macro::TokenStream;
 use proc_macro2::{TokenStream as SynTokenStream};
-use syn::{*, Error};
+use syn::*;
 use syn::export::Span;
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
@@ -47,7 +47,7 @@ impl FieldAttrs {
 
 #[derive(FromDeriveInput)]
 #[darling(attributes(events))]
-pub struct EventsAttrs {
+struct EventsAttrs {
     ident: Ident,
 
     #[darling(default)]
@@ -66,13 +66,43 @@ fn to_vec<T, P>(punctuated: &Punctuated<T, P>) -> Vec<&T> {
     punctuated.iter().collect()
 }
 
+/// A type for including the effect of `#[derive(Events)]` in a procedural macro.
 #[derive(Default)]
-struct DerivedImpl {
+pub struct DeriveStaticEvents {
     arms: Vec<CallGroup>,
     subhandlers_exist: bool,
     get_service_body: SynTokenStream,
+    discriminator: Vec<Type>,
+    name: Option<Ident>,
+    input: Option<DeriveInput>,
 }
-impl DerivedImpl {
+impl DeriveStaticEvents {
+    /// Parses a derive input block.
+    pub fn new(input: &DeriveInput) -> Result<Self> {
+        let attrs: EventsAttrs = EventsAttrs::from_derive_input(input)?;
+        let name = attrs.impl_on_external.as_ref().unwrap_or(&attrs.ident);
+        let name = name.clone();
+        let mut data = match &input.data {
+            Data::Struct(data) => DeriveStaticEvents::for_struct(&name, data),
+            Data::Enum(data) => DeriveStaticEvents::for_enum(&name, data),
+            Data::Union(_) =>
+                error(input.span(), "EventDispatch can only be derived on a struct or enum.")?,
+        };
+        data.name = Some(name);
+        data.input = Some(input.clone());
+        Ok(data)
+    }
+
+    /// Parses a token stream.
+    pub fn from_tokens(toks: impl ToTokens) -> Result<Self> {
+        Self::new(&mut parse2(toks.into_token_stream())?)
+    }
+
+    /// Parses a token stream.
+    pub fn from_tokens_raw(toks: proc_macro::TokenStream) -> Result<Self> {
+        Self::new(&mut parse(toks)?)
+    }
+
     fn generate_arm(
         &mut self, self_path: SynTokenStream, tp: Style, fields: &[&Field],
         is_struct: bool,
@@ -149,12 +179,12 @@ impl DerivedImpl {
         }
     }
 
-    fn for_struct(ident: &Ident, fields: &DataStruct) -> DerivedImpl {
+    fn for_struct(ident: &Ident, fields: &DataStruct) -> DeriveStaticEvents {
         let mut derived = Self::default();
         derived.generate_arm_fields(quote! { #ident }, &fields.fields, true);
         derived
     }
-    fn for_enum(ident: &Ident, variants: &DataEnum) -> DerivedImpl {
+    fn for_enum(ident: &Ident, variants: &DataEnum) -> DeriveStaticEvents {
         let mut derived = Self::default();
         for variant in &variants.variants {
             let variant_ident = &variant.ident;
@@ -163,7 +193,16 @@ impl DerivedImpl {
         derived
     }
 
-    fn make_impl(self, name: &Ident, input: &DeriveInput) -> SynTokenStream {
+    /// Adds a discriminator to the events handler.
+    pub fn add_discriminator(&mut self, discriminator: Type) {
+        self.discriminator.push(discriminator);
+    }
+
+    /// Generates an impl block for the events handler.
+    pub fn generate(self) -> SynTokenStream {
+        let name = self.name.unwrap();
+        let input = self.input.unwrap();
+
         let get_service_self = if FieldAttrs::from_attrs(&input.attrs).is_service {
             check_get_service_type(quote!(self))
         } else {
@@ -174,11 +213,16 @@ impl DerivedImpl {
         let (impl_bounds, ty_param, where_bounds) = input.generics.split_for_impl();
 
         let dist = Some(quote! { ::static_events::private::HandlerImplBlock });
-        let event_handler = if self.subhandlers_exist {
+        let event_handler = if self.subhandlers_exist || !self.discriminator.is_empty() {
             let mut common = Vec::new();
             common.push(CallStage::new(quote! { _this }, quote! { #name #ty_param }, dist));
+            for dist in self.discriminator {
+                common.push(CallStage::new(
+                    quote! { _this }, quote! { #name #ty_param }, Some(quote! { #dist }),
+                ));
+            }
             make_merge_event_handler(
-                EventHandlerTarget::Ident(name), &input.generics, None, self.arms, common,
+                EventHandlerTarget::Ident(&name), &input.generics, None, self.arms, common,
             )
         } else {
             let event_generics_raw = quote! {
@@ -251,23 +295,4 @@ impl DerivedImpl {
             };
         }
     }
-}
-
-pub fn derive_events(input: TokenStream) -> TokenStream {
-    let input: DeriveInput = parse_macro_input!(input);
-    let attrs: EventsAttrs = match EventsAttrs::from_derive_input(&input) {
-        Ok(attrs) => attrs,
-        Err(e) => return e.write_errors().into(),
-    };
-    let name = attrs.impl_on_external.as_ref().unwrap_or(&attrs.ident);
-    let impl_data = match &input.data {
-        Data::Struct(data) => DerivedImpl::for_struct(name, data),
-        Data::Enum(data) => DerivedImpl::for_enum(name, data),
-        Data::Union(_) => {
-            return Error::new(
-                input.span(), "EventDispatch can only be derived on a struct or enum.",
-            ).to_compile_error().into()
-        }
-    };
-    TokenStream::from(impl_data.make_impl(name, &input))
 }

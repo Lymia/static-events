@@ -3,4 +3,5 @@
 members = [
     "static-events",
     "static-events_derive",
+    "static-events_internals",
 ]
