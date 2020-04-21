@@ -11,6 +11,12 @@ use std::task::{Poll, Context};
 
 // TODO: Fix block_on to work with running asynchronous stuff (internal thread pool?)
 
+/// A hack to allow the `type_alias_impl_trait` feature flag to be contained to this crate.
+#[allow_internal_unstable(type_alias_impl_trait)]
+pub macro allow_existentials(($($head:tt)*) ($($tail:tt)*)) {
+    type $($head)* = impl $($tail)*;
+}
+
 #[inline(never)]
 #[cold]
 pub fn event_error() -> ! {

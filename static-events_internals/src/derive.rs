@@ -9,17 +9,17 @@ use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use quote::*;
 
-fn dispatch_get_service(field: impl ToTokens) -> SynTokenStream {
+fn dispatch_get_service(crate_name: &SynTokenStream, field: impl ToTokens) -> SynTokenStream {
     quote! {
-        match ::static_events::handlers::Events::get_service::<__DowncastTarget>(#field) {
+        match #crate_name::handlers::Events::get_service::<__DowncastTarget>(#field) {
             Some(t) => return Some(t),
             None => { }
         }
     }
 }
-fn check_get_service_type(field: impl ToTokens) -> SynTokenStream {
+fn check_get_service_type(crate_name: &SynTokenStream, field: impl ToTokens) -> SynTokenStream {
     quote! {
-        match ::static_events::private::CheckDowncast::<__DowncastTarget>::downcast_ref(#field) {
+        match #crate_name::private::CheckDowncast::<__DowncastTarget>::downcast_ref(#field) {
             Some(t) => return Some(t),
             None => { }
         }
@@ -67,46 +67,63 @@ fn to_vec<T, P>(punctuated: &Punctuated<T, P>) -> Vec<&T> {
 }
 
 /// A type for including the effect of `#[derive(Events)]` in a procedural macro.
-#[derive(Default)]
 pub struct DeriveStaticEvents {
     arms: Vec<CallGroup>,
+    crate_name: SynTokenStream,
     subhandlers_exist: bool,
     get_service_body: SynTokenStream,
     discriminator: Vec<Type>,
-    name: Option<Ident>,
-    input: Option<DeriveInput>,
+    name: Ident,
+    input: DeriveInput,
 }
 impl DeriveStaticEvents {
     /// Parses a derive input block.
-    pub fn new(input: &DeriveInput) -> Result<Self> {
+    pub fn new(input: &DeriveInput, crate_name: Option<SynTokenStream>) -> Result<Self> {
+        let crate_name = crate_name.unwrap_or(quote! { ::static_events });
+
         let attrs: EventsAttrs = EventsAttrs::from_derive_input(input)?;
         let name = attrs.impl_on_external.as_ref().unwrap_or(&attrs.ident);
         let name = name.clone();
-        let mut data = match &input.data {
-            Data::Struct(data) => DeriveStaticEvents::for_struct(&name, data),
-            Data::Enum(data) => DeriveStaticEvents::for_enum(&name, data),
+
+        let mut data = DeriveStaticEvents {
+            arms: Vec::new(),
+            crate_name,
+            subhandlers_exist: false,
+            get_service_body: Default::default(),
+            discriminator: Vec::new(),
+            name: name.clone(),
+            input: input.clone(),
+        };
+        match &input.data {
+            Data::Struct(input_data) => data.generate_struct(&name, input_data),
+            Data::Enum(input_data) => data.generate_enum(&name, input_data),
             Data::Union(_) =>
                 error(input.span(), "EventDispatch can only be derived on a struct or enum.")?,
-        };
-        data.name = Some(name);
-        data.input = Some(input.clone());
+        }
         Ok(data)
+    }
+
+    /// Sets the crate name to use. Overrides any manual tags on the derive.
+    pub fn set_crate_name(&mut self, name: impl ToTokens) {
+        self.crate_name = name.to_token_stream();
     }
 
     /// Parses a token stream.
     pub fn from_tokens(toks: impl ToTokens) -> Result<Self> {
-        Self::new(&mut parse2(toks.into_token_stream())?)
+        Self::new(&mut parse2(toks.into_token_stream())?, None)
     }
 
     /// Parses a token stream.
     pub fn from_tokens_raw(toks: proc_macro::TokenStream) -> Result<Self> {
-        Self::new(&mut parse(toks)?)
+        Self::new(&mut parse(toks)?, None)
     }
 
     fn generate_arm(
         &mut self, self_path: SynTokenStream, tp: Style, fields: &[&Field],
         is_struct: bool,
     ) {
+        let crate_name = &self.crate_name;
+
         let mut matches = SynTokenStream::new();
         for (i, field) in fields.iter().enumerate() {
             let field_ident = i_ident(i);
@@ -141,18 +158,18 @@ impl DeriveStaticEvents {
             let field_ident = i_ident(i);
 
             if attr.is_service {
-                get_service.extend(check_get_service_type(&field_ident));
+                get_service.extend(check_get_service_type(&self.crate_name, &field_ident));
             }
             if attr.is_subhandler {
-                get_service.extend(dispatch_get_service(&field_ident));
-                stages.push(CallStage::new(if is_struct {
+                get_service.extend(dispatch_get_service(&self.crate_name, &field_ident));
+                stages.push(CallStage::new(crate_name, if is_struct {
                     quote! { &_this.#name }
                 } else {
                     quote! {
                         if let #self_path #matches = _this {
                             #field_ident
                         } else {
-                            ::static_events::private::event_error()
+                            #crate_name::private::event_error()
                         }
                     }
                 }, &field.ty, None));
@@ -179,18 +196,18 @@ impl DeriveStaticEvents {
         }
     }
 
-    fn for_struct(ident: &Ident, fields: &DataStruct) -> DeriveStaticEvents {
-        let mut derived = Self::default();
-        derived.generate_arm_fields(quote! { #ident }, &fields.fields, true);
-        derived
+    fn generate_struct(
+        &mut self, ident: &Ident, fields: &DataStruct,
+    ) {
+        self.generate_arm_fields(quote! { #ident }, &fields.fields, true);
     }
-    fn for_enum(ident: &Ident, variants: &DataEnum) -> DeriveStaticEvents {
-        let mut derived = Self::default();
+    fn generate_enum(
+        &mut self, ident: &Ident, variants: &DataEnum,
+    ) {
         for variant in &variants.variants {
             let variant_ident = &variant.ident;
-            derived.generate_arm_fields(quote! { #ident::#variant_ident }, &variant.fields, false);
+            self.generate_arm_fields(quote! { #ident::#variant_ident }, &variant.fields, false);
         }
-        derived
     }
 
     /// Adds a discriminator to the events handler.
@@ -200,11 +217,13 @@ impl DeriveStaticEvents {
 
     /// Generates an impl block for the events handler.
     pub fn generate(self) -> SynTokenStream {
-        let name = self.name.unwrap();
-        let input = self.input.unwrap();
+        let crate_name = &self.crate_name;
+        
+        let name = self.name;
+        let input = self.input;
 
         let get_service_self = if FieldAttrs::from_attrs(&input.attrs).is_service {
-            check_get_service_type(quote!(self))
+            check_get_service_type(crate_name, quote!(self))
         } else {
             quote! { }
         };
@@ -212,38 +231,44 @@ impl DeriveStaticEvents {
 
         let (impl_bounds, ty_param, where_bounds) = input.generics.split_for_impl();
 
-        let dist = Some(quote! { ::static_events::private::HandlerImplBlock });
+        let dist = Some(quote! { #crate_name::private::HandlerImplBlock });
         let event_handler = if self.subhandlers_exist || !self.discriminator.is_empty() {
             let mut common = Vec::new();
-            common.push(CallStage::new(quote! { _this }, quote! { #name #ty_param }, dist));
+            common.push(CallStage::new(
+                crate_name, quote! { _this }, quote! { #name #ty_param }, dist,
+            ));
             for dist in self.discriminator {
                 common.push(CallStage::new(
+                    crate_name,
                     quote! { _this }, quote! { #name #ty_param }, Some(quote! { #dist }),
                 ));
             }
             make_merge_event_handler(
+                crate_name,
                 EventHandlerTarget::Ident(&name), &input.generics, None, self.arms, common,
             )
         } else {
             let event_generics_raw = quote! {
                 '__EventLifetime,
-                __EventDispatch: ::static_events::Events,
-                __EventType: ::static_events::Event + '__EventLifetime,
-                __EventPhase: ::static_events::handlers::EventPhase + '__EventLifetime,
+                __EventDispatch: #crate_name::Events,
+                __EventType: #crate_name::Event + '__EventLifetime,
+                __EventPhase: #crate_name::handlers::EventPhase + '__EventLifetime,
             };
             let event_generics = generics(&event_generics_raw);
             let handler_generics = merge_generics(&event_generics, &input.generics);
             let (handler_impl_bounds, handler_ty_param, handler_where_bounds) =
                 handler_generics.split_for_impl();
 
-            let is_implemented_expr = is_implemented(quote!(Self), dist.clone());
-            let is_async_expr = is_async(quote!(Self), dist.clone());
+            let is_implemented_expr = is_implemented(crate_name, quote!(Self), dist.clone());
+            let is_async_expr = is_async(crate_name, quote!(Self), dist.clone());
 
             quote! {
-                type __PassthroughEventFut #handler_impl_bounds #handler_where_bounds =
-                    impl ::std::future::Future<Output = ::static_events::EventResult> +
-                    '__EventLifetime;
-                impl #handler_impl_bounds ::static_events::handlers::EventHandler<
+                #crate_name::private::allow_existentials! {
+                    (__PassthroughEventFut #handler_impl_bounds #handler_where_bounds)
+                    (::std::future::Future<Output = #crate_name::EventResult> +
+                        '__EventLifetime)
+                }
+                impl #handler_impl_bounds #crate_name::handlers::EventHandler<
                     '__EventLifetime, __EventDispatch, __EventType, __EventPhase,
                 > for #name #handler_where_bounds {
                     const IS_IMPLEMENTED: bool = #is_implemented_expr;
@@ -252,13 +277,13 @@ impl DeriveStaticEvents {
                     #[inline]
                     fn on_phase(
                         &'__EventLifetime self,
-                        target: &'__EventLifetime ::static_events::Handler<__EventDispatch>,
+                        target: &'__EventLifetime #crate_name::Handler<__EventDispatch>,
                         ev: &'__EventLifetime mut __EventType,
                         state: &'__EventLifetime mut __EventType::State,
-                    ) -> ::static_events::EventResult {
-                        ::static_events::private::on_phase::<
+                    ) -> #crate_name::EventResult {
+                        #crate_name::private::on_phase::<
                             Self, __EventDispatch, __EventType, __EventPhase,
-                            ::static_events::private::HandlerImplBlock,
+                            #crate_name::private::HandlerImplBlock,
                         >(self, target, ev, state)
                     }
 
@@ -267,13 +292,13 @@ impl DeriveStaticEvents {
                     #[inline]
                     fn on_phase_async (
                         &'__EventLifetime self,
-                        target: &'__EventLifetime ::static_events::Handler<__EventDispatch>,
+                        target: &'__EventLifetime #crate_name::Handler<__EventDispatch>,
                         ev: &'__EventLifetime mut __EventType,
                         state: &'__EventLifetime mut __EventType::State,
                     ) -> __PassthroughEventFut #handler_ty_param {
-                        ::static_events::private::on_phase_async::<
+                        #crate_name::private::on_phase_async::<
                             '__EventLifetime, Self, __EventDispatch, __EventType, __EventPhase,
-                            ::static_events::private::HandlerImplBlock,
+                            #crate_name::private::HandlerImplBlock,
                         >(self, target, ev, state)
                     }
                 }
@@ -283,7 +308,7 @@ impl DeriveStaticEvents {
         quote! {
             #[allow(non_snake_case)]
             const _: () = {
-                impl #impl_bounds ::static_events::Events for #name #ty_param #where_bounds {
+                impl #impl_bounds #crate_name::Events for #name #ty_param #where_bounds {
                     fn get_service<__DowncastTarget>(&self) -> Option<&__DowncastTarget> {
                         #get_service_self
                         match self { #get_service_body }

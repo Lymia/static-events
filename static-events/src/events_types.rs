@@ -32,7 +32,6 @@
 ///
 /// Usage:
 /// ```
-/// # #![feature(type_alias_impl_trait, async_await)]
 /// # use static_events::*;
 /// # pub struct MyEventB(u32); simple_event!(MyEventB, u32);
 /// #[derive(Events)]
@@ -103,7 +102,6 @@ macro_rules! simple_event {
 /// Usage:
 ///
 /// ```
-/// # #![feature(type_alias_impl_trait, async_await)]
 /// # use static_events::*; use std::io;
 /// # pub struct MyEvent(u32); failable_event!(MyEvent, u32, ::std::io::Error);
 /// #[derive(Events)]

@@ -173,7 +173,7 @@ impl HandlerType {
             _ => false,
         }
     }
-    fn for_attr(attr: &Attribute) -> Result<Option<HandlerType>> {
+    fn for_attr(crate_name: &SynTokenStream, attr: &Attribute) -> Result<Option<HandlerType>> {
         match last_path_segment(&attr.path).as_str() {
             "event_handler" => {
                 Ok(Some(HandlerType::EventHandler(if !attr.tokens.is_empty() {
@@ -182,7 +182,7 @@ impl HandlerType {
                         Err(_) => error(attr.span(), "Error parsing #[event_handler] attribute.")?,
                     }
                 } else {
-                    quote! { ::static_events::EvOnEvent }
+                    quote! { #crate_name::EvOnEvent }
                 })))
             },
             _ => Ok(None),
@@ -199,10 +199,12 @@ enum MethodInfo {
     EventHandler { phase: SynTokenStream, sig: HandlerSig },
 }
 impl MethodInfo {
-    fn for_method(method: &ImplItemMethod) -> Result<Option<MethodInfo>> {
+    fn for_method(
+        crate_name: &SynTokenStream, method: &ImplItemMethod,
+    ) -> Result<Option<MethodInfo>> {
         let mut handler_type: Option<HandlerType> = None;
         for attr in &method.attrs {
-            if let Some(tp) = HandlerType::for_attr(attr)? {
+            if let Some(tp) = HandlerType::for_attr(crate_name, attr)? {
                 if let Some(e_tp) = &handler_type {
                     error(
                         attr.span(),
@@ -227,6 +229,7 @@ impl MethodInfo {
 }
 
 fn create_normal_handler(
+    crate_name: &SynTokenStream,
     id: usize, count: usize,
     self_ty: &Type, impl_generics: &Generics, phase: &SynTokenStream, sig: &HandlerSig,
 ) -> (Ident, SynTokenStream) {
@@ -235,14 +238,14 @@ fn create_normal_handler(
     let existential = ident!("__RootEventFut_{}", id);
 
     let event_ty = &sig.event_ty;
-    let event_ty_event = quote! { <#event_ty as ::static_events::Event> };
+    let event_ty_event = quote! { <#event_ty as #crate_name::Event> };
 
     let method_generics = strip_lifetimes(&sig.method_generics);
     let merged_generics = merge_generics(impl_generics, &method_generics);
 
     let async_generics = generics(&quote! {
         '__EventLifetime,
-        __EventDispatch: ::static_events::Events,
+        __EventDispatch: #crate_name::Events,
     });
     let async_generics = merge_generics(&merged_generics, &async_generics);
     let (async_bounds, async_ty, async_where_bounds) =
@@ -251,14 +254,14 @@ fn create_normal_handler(
     let (is_async, sync_body, future_ty, async_defs, async_body) = match sig.make_body(self_ty) {
         EventHandlerBody::Sync(sync_body) => (
             false, sync_body,
-            quote! { ::static_events::private::NullFuture },
+            quote! { #crate_name::private::NullFuture },
             quote! { },
-            quote! { ::static_events::private::event_error() },
+            quote! { #crate_name::private::event_error() },
         ),
         EventHandlerBody::Async(async_body) => (
             true,
             quote! {
-                ::static_events::private::block_on(
+                #crate_name::private::block_on(
                     #async_fn(self, _target, _ev, _state)
                 )
             },
@@ -266,18 +269,20 @@ fn create_normal_handler(
             quote! {
                 async fn #async_fn #async_bounds (
                     _self: &'__EventLifetime #self_ty,
-                    _target: &'__EventLifetime ::static_events::Handler<__EventDispatch>,
+                    _target: &'__EventLifetime #crate_name::Handler<__EventDispatch>,
                     _ev: &'__EventLifetime mut #event_ty,
                     _state: &'__EventLifetime mut #event_ty_event::State,
-                ) -> ::static_events::EventResult #async_where_bounds {
-                    use ::static_events::Event;
+                ) -> #crate_name::EventResult #async_where_bounds {
+                    use #crate_name::Event;
                     let ev_result = (#async_body).into();
                     _ev.to_event_result(_state, ev_result)
                 }
 
-                type #existential #async_generics =
-                    impl ::std::future::Future<Output = ::static_events::EventResult> +
-                    '__EventLifetime;
+                #crate_name::private::allow_existentials! {
+                    (#existential #async_generics)
+                    (::std::future::Future<Output = #crate_name::EventResult> +
+                        '__EventLifetime)
+                }
             },
             quote! {
                 #async_fn(self, target, ev, state)
@@ -286,7 +291,7 @@ fn create_normal_handler(
     };
 
     let phantom_impl = if count == 1 {
-        quote! { pub type #phantom = ::static_events::private::HandlerImplBlock; }
+        quote! { pub type #phantom = #crate_name::private::HandlerImplBlock; }
     } else {
         quote! { pub enum #phantom { } }
     };
@@ -294,7 +299,7 @@ fn create_normal_handler(
     (phantom.clone(), quote! {
         #phantom_impl
         #async_defs
-        impl #async_bounds ::static_events::handlers::EventHandler<
+        impl #async_bounds #crate_name::handlers::EventHandler<
             '__EventLifetime, __EventDispatch, #event_ty, #phase, #phantom,
         > for #self_ty #async_where_bounds {
             const IS_IMPLEMENTED: bool = true;
@@ -303,11 +308,11 @@ fn create_normal_handler(
             #[inline]
             fn on_phase(
                 &'__EventLifetime self,
-                _target: &'__EventLifetime ::static_events::Handler<__EventDispatch>,
+                _target: &'__EventLifetime #crate_name::Handler<__EventDispatch>,
                 _ev: &'__EventLifetime mut #event_ty,
                 _state: &'__EventLifetime mut #event_ty_event::State,
-            ) -> ::static_events::EventResult {
-                use ::static_events::Event;
+            ) -> #crate_name::EventResult {
+                use #crate_name::Event;
                 let ev_result = (#sync_body).into();
                 _ev.to_event_result(_state, ev_result)
             }
@@ -317,17 +322,18 @@ fn create_normal_handler(
             #[inline]
             fn on_phase_async (
                 &'__EventLifetime self,
-                target: &'__EventLifetime ::static_events::Handler<__EventDispatch>,
+                target: &'__EventLifetime #crate_name::Handler<__EventDispatch>,
                 ev: &'__EventLifetime mut #event_ty,
                 state: &'__EventLifetime mut #event_ty_event::State,
             ) -> #future_ty {
-                use ::static_events::Event;
+                use #crate_name::Event;
                 #async_body
             }
         }
     })
 }
 fn create_impls(
+    crate_name: &SynTokenStream,
     self_ty: &Type, impl_generics: &Generics,
     methods: &[MethodInfo], synthetic_methods: &[ImplItemMethod],
 ) -> SynTokenStream {
@@ -338,10 +344,12 @@ fn create_impls(
         match info {
             MethodInfo::EventHandler { phase, sig } => {
                 let (phantom, tts) = create_normal_handler(
-                    i, methods.len(), self_ty, impl_generics, phase, sig,
+                    crate_name, i, methods.len(), self_ty, impl_generics, phase, sig,
                 );
                 impls.extend(tts);
-                stages.push(CallStage::new(quote!(_this), self_ty, Some(quote!(#phantom))));
+                stages.push(CallStage::new(
+                    crate_name, quote!(_this), self_ty, Some(quote!(#phantom)),
+                ));
             }
         }
     }
@@ -361,8 +369,9 @@ fn create_impls(
     if methods.len() > 1 {
         impls.extend(
             make_merge_event_handler(
+                crate_name,
                 EventHandlerTarget::Type(self_ty), impl_generics,
-                Some(quote! { ::static_events::private::HandlerImplBlock }),
+                Some(quote! { #crate_name::private::HandlerImplBlock }),
                 vec![group], Vec::new(),
             )
         );
@@ -393,19 +402,22 @@ pub struct EventsImplAttr {
     synthetic_methods: Vec<ImplItemMethod>,
     emit_input: bool,
     impl_input: ItemImpl,
+    crate_name: SynTokenStream,
 }
 impl EventsImplAttr {
     /// Parses an impl block.
     ///
     /// It takes a mutable reference to the impl block, as it may mark some attributes processed.
-    pub fn new(impl_block: &mut ItemImpl) -> Result<Self> {
+    pub fn new(impl_block: &mut ItemImpl, crate_name: Option<SynTokenStream>) -> Result<Self> {
+        let crate_name = crate_name.unwrap_or(quote! { ::static_events });
+
         let mut handlers = Vec::new();
         let mut errors = Error::empty();
 
         for item in &mut impl_block.items {
             match item {
                 ImplItem::Method(method) => {
-                    match MethodInfo::for_method(method) {
+                    match MethodInfo::for_method(&crate_name, method) {
                         Ok(Some(handler)) => handlers.push(handler),
                         Ok(None) => { }
                         Err(e) => errors = errors.combine(e),
@@ -425,6 +437,7 @@ impl EventsImplAttr {
                 synthetic_methods: Vec::new(),
                 emit_input: false,
                 impl_input: impl_block.clone(),
+                crate_name,
             })
         }
     }
@@ -436,18 +449,18 @@ impl EventsImplAttr {
 
     /// Parses a token stream.
     pub fn from_tokens(toks: impl ToTokens) -> Result<Self> {
-        Ok(Self::new(&mut parse2(toks.into_token_stream())?)?.mark_emit_input())
+        Ok(Self::new(&mut parse2(toks.into_token_stream())?, None)?.mark_emit_input())
     }
 
     /// Parses a token stream.
     pub fn from_tokens_raw(toks: proc_macro::TokenStream) -> Result<Self> {
-        Ok(Self::new(&mut parse(toks)?)?.mark_emit_input())
+        Ok(Self::new(&mut parse(toks)?, None)?.mark_emit_input())
     }
 
     /// Processes an synthetic method, emitting it alongside the method's other impls.
     pub fn process_synthetic_method_obj(&mut self, method: impl ToTokens) -> Result<()> {
         let mut method: ImplItemMethod = parse2(method.into_token_stream())?;
-        match MethodInfo::for_method(&mut method) {
+        match MethodInfo::for_method(&self.crate_name, &mut method) {
             Ok(Some(handler)) => self.methods.push(handler),
             Ok(None) => { }
             Err(e) => return Err(e),
@@ -460,6 +473,7 @@ impl EventsImplAttr {
     /// Generates an impl block for the event handler implementation.
     pub fn generate(self) -> SynTokenStream {
         let impls = create_impls(
+            &self.crate_name,
             &self.self_ty, &self.impl_generics, &self.methods, &self.synthetic_methods,
         );
         if self.emit_input {

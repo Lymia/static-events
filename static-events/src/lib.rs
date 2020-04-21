@@ -1,4 +1,4 @@
-#![feature(const_fn, specialization, type_alias_impl_trait)]
+#![feature(const_fn, specialization, type_alias_impl_trait, allow_internal_unstable, decl_macro)]
 
 // TODO: Implement filtering of some kind on events, and state between phases.
 // TODO: Document how to set the phase of an event handler.
@@ -10,11 +10,6 @@
 //! similarily compile down to a relatively optimized future
 //!
 //! This crate relies on many unstable features, and can only be used on nightly versions of Rust.
-//! It currently requires the following feature on the user crate:
-//!
-//! ```
-//! #![feature(type_alias_impl_trait)]
-//! ```
 //!
 //! # Basic model
 //!
@@ -57,7 +52,6 @@
 //!
 //! Example:
 //! ```
-//! # #![feature(type_alias_impl_trait, async_await)]
 //! # use static_events::*;
 //! struct MyEvent(u32);
 //! simple_event!(MyEvent, u32, 0);
@@ -80,7 +74,6 @@
 //! Fields inside the [`Events`] can be marked with `#[subhandler]` to cause any events to be
 //! passed on to another event handler:
 //! ```
-//! # #![feature(type_alias_impl_trait, async_await)]
 //! # use static_events::*;
 //! # struct MyEvent(u32); simple_event!(MyEvent, u32, 0);
 //! # #[derive(Default)] struct MyEventHandler;
