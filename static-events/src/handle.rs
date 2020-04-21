@@ -21,6 +21,12 @@ struct HandleData<E: SyncEvents> {
     status: RwLock<Status<E>>, shutdown_initialized: AtomicBool,
 }
 
+#[inline(never)]
+#[cold]
+pub fn already_shut_down() -> ! {
+    panic!("Handle already shut down!")
+}
+
 /// A wrapper around a [`Handler`] designed to help with graceful shutdowns.
 #[derive(Debug)]
 pub struct EventsHandle<E: SyncEvents>(Arc<HandleData<E>>);
@@ -114,9 +120,17 @@ impl <E: SyncEvents> EventsHandle<E> {
         }
     }
 
+    /// Returns the underlying [`Handler`], or panics if it has already been shut down.
+    pub fn lock(&self) -> Handler<E> {
+        match self.try_lock() {
+            Some(v) => v,
+            _ => already_shut_down(),
+        }
+    }
+
     /// Returns the underlying [`Handler`] wrapped in a [`Some`], or [`None`] if it has already
     /// been shut down.
-    pub fn lock(&self) -> Option<Handler<E>> {
+    pub fn try_lock(&self) -> Option<Handler<E>> {
         let lock = self.0.status.read();
         match &*lock {
             Status::Inactive => panic!("DispatchHandle not yet active."),

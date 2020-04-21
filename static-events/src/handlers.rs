@@ -72,6 +72,12 @@ pub trait EventHandler<'a, E: Events, Ev: Event + 'a, P: EventPhase, D = Default
     ) -> Self::FutureType;
 }
 
+#[inline(never)]
+#[cold]
+pub fn missing_service<S>() -> ! {
+    panic!("missing service: {}", std::any::type_name::<S>())
+}
+
 #[derive(Default, Debug)]
 /// A wrapper for [`Events`] that allows dispatching events into them.
 pub struct Handler<E: Events>(Arc<E>);
@@ -83,6 +89,10 @@ impl <E: Events> Handler<E> {
 
     /// Retrieves a service from an [`Events`].
     ///
+    /// # Panics
+    ///
+    /// This function will panic if the service does not exist.
+    ///
     /// # Example
     /// ```
     /// # use static_events::*;
@@ -93,9 +103,30 @@ impl <E: Events> Handler<E> {
     /// struct EventHandler(#[service] TestService);
     ///
     /// let handler = Handler::new(EventHandler(TestService));
-    /// assert_eq!(handler.get_service::<TestService>(), Some(&TestService));
+    /// assert_eq!(handler.get_service::<TestService>(), &TestService);
     /// ```
-    pub fn get_service<S>(&self) -> Option<&S> {
+    pub fn get_service<S>(&self) -> &S {
+        match self.0.get_service() {
+            Some(v) => v,
+            None => missing_service::<S>(),
+        }
+    }
+
+    /// Retrieves a service that may or may not exist from an [`Events`].
+    ///
+    /// # Example
+    /// ```
+    /// # use static_events::*;
+    /// #[derive(Eq, PartialEq, Debug)]
+    /// struct TestService;
+    ///
+    /// #[derive(Events)]
+    /// struct EventHandler(#[service] TestService);
+    ///
+    /// let handler = Handler::new(EventHandler(TestService));
+    /// assert_eq!(handler.get_service_opt::<TestService>(), Some(&TestService));
+    /// ```
+    pub fn get_service_opt<S>(&self) -> Option<&S> {
         self.0.get_service()
     }
 
