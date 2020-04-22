@@ -253,7 +253,11 @@ fn create_normal_handler(
 
     let (is_async, sync_body, future_ty, async_defs, async_body) = match sig.make_body(self_ty) {
         EventHandlerBody::Sync(sync_body) => (
-            false, sync_body,
+            false,
+            quote! {{
+                let _self = self;
+                #sync_body
+            }},
             quote! { #crate_name::private::NullFuture },
             quote! { },
             quote! { #crate_name::private::event_error() },
