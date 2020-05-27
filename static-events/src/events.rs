@@ -74,7 +74,7 @@ pub trait Event: Sized {
     /// Extracts an [`EventResult`] and updates state based on an event handler's return value.
     fn to_event_result(&self, _: &mut Self::State, _: Self::MethodRetVal) -> EventResult;
     /// Derives the output of the event dispatch from the current state.
-    fn to_return_value(&self, _: &Handler<impl Events>, _: Self::State) -> Self::RetVal;
+    fn to_return_value(self, _: &Handler<impl Events>, _: Self::State) -> Self::RetVal;
 }
 
 /// An [`Event`] that does not use the `MethodRetVal` or `StateArg` mechanisms.
@@ -90,7 +90,7 @@ pub trait SimpleInterfaceEvent: Sized {
     /// Constructs the state maintained during an event dispatch.
     fn starting_state(&self, _: &Handler<impl Events>) -> Self::State;
     /// Derives the output of the event dispatch from the current state.
-    fn to_return_value(&self, _: &Handler<impl Events>, _: Self::State) -> Self::RetVal;
+    fn to_return_value(self, _: &Handler<impl Events>, _: Self::State) -> Self::RetVal;
 }
 impl <T : SimpleInterfaceEvent> Event for T {
     type State = T::State;
@@ -107,7 +107,7 @@ impl <T : SimpleInterfaceEvent> Event for T {
     fn to_event_result(&self, _: &mut T::State, result: EventResult) -> EventResult {
         result
     }
-    fn to_return_value(&self, target: &Handler<impl Events>, state: T::State) -> T::RetVal {
+    fn to_return_value(self, target: &Handler<impl Events>, state: T::State) -> T::RetVal {
         SimpleInterfaceEvent::to_return_value(self, target, state)
     }
 }
@@ -129,7 +129,7 @@ impl <T : SimpleEvent> SimpleInterfaceEvent for T {
     fn starting_state(&self, target: &Handler<impl Events>) -> T::State {
         SimpleEvent::starting_state(self, target)
     }
-    fn to_return_value(&self, _: &Handler<impl Events>, state: T::State) -> T::State {
+    fn to_return_value(self, _: &Handler<impl Events>, state: T::State) -> T::State {
         state
     }
 }

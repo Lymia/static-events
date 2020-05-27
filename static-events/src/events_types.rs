@@ -75,6 +75,61 @@ macro_rules! simple_event {
     };
 }
 
+/// A helper macro to define events that return themselves as output.
+///
+/// Event handlers for events defined using this macro should return either an [`EventResult`]
+/// or `()`.
+///
+/// # Example
+///
+/// Declaration:
+///
+/// ```
+/// # use static_events::*;
+/// pub struct MyEvent(u32);
+/// self_event!(MyEvent);
+/// ```
+///
+/// Usage:
+///
+/// ```
+/// # use static_events::*;
+/// # #[derive(PartialEq, Debug)] pub struct MyEvent(u32);
+/// # self_event!(MyEvent);
+/// #[derive(Events)]
+/// struct MyEventHandler;
+///
+/// #[events_impl]
+/// impl MyEventHandler {
+///     #[event_handler]
+///     fn handle_event(ev: &mut MyEvent) {
+///         ev.0 *= 10;
+///     }
+/// }
+///
+/// let handler = Handler::new(MyEventHandler);
+/// assert_eq!(handler.dispatch(MyEvent(10)), MyEvent(100));
+/// ```
+#[macro_export]
+macro_rules! self_event {
+    ([$($bounds:tt)*] $ev:ty $(,)?) => {
+        impl <$($bounds)*> $crate::events::SimpleInterfaceEvent for $ev {
+            type State = ();
+            type RetVal = $ev;
+            fn starting_state(&self, _: &$crate::Handler<impl $crate::Events>) { }
+            fn to_return_value(
+                self, _: &$crate::Handler<impl $crate::Events>, _: (),
+            ) -> $ev {
+                self
+            }
+        }
+    };
+    ($ev:ty $(,)?) => {
+        self_event!([] $ev);
+    };
+}
+
+
 /// A helper macro to define events that can fail.
 ///
 /// The first argument is the event type, the second is the type of the event state, and the
@@ -155,7 +210,7 @@ macro_rules! failable_event {
                 }
             }
             fn to_return_value(
-                &self, _: &$crate::Handler<impl $crate::Events>,
+                self, _: &$crate::Handler<impl $crate::Events>,
                 state: $crate::private::Result<$state, $error>,
             ) -> $crate::private::Result<$state, $error> {
                 state
