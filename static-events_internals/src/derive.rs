@@ -270,7 +270,7 @@ impl DeriveStaticEvents {
                 }
                 impl #handler_impl_bounds #crate_name::handlers::EventHandler<
                     '__EventLifetime, __EventDispatch, __EventType, __EventPhase,
-                > for #name #handler_where_bounds {
+                > for #name #ty_param #handler_where_bounds {
                     const IS_IMPLEMENTED: bool = #is_implemented_expr;
                     const IS_ASYNC: bool = #is_async_expr;
 
