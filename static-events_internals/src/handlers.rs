@@ -229,7 +229,7 @@ impl MethodInfo {
 }
 
 fn create_normal_handler(
-    crate_name: &SynTokenStream,
+    crate_name: &SynTokenStream, discriminator: &SynTokenStream,
     id: usize, count: usize,
     self_ty: &Type, impl_generics: &Generics, phase: &SynTokenStream, sig: &HandlerSig,
 ) -> (Ident, SynTokenStream) {
@@ -295,7 +295,7 @@ fn create_normal_handler(
     };
 
     let phantom_impl = if count == 1 {
-        quote! { pub type #phantom = #crate_name::private::HandlerImplBlock; }
+        quote! { pub type #phantom = #discriminator; }
     } else {
         quote! { pub enum #phantom { } }
     };
@@ -337,7 +337,7 @@ fn create_normal_handler(
     })
 }
 fn create_impls(
-    crate_name: &SynTokenStream,
+    crate_name: &SynTokenStream, discriminator: &SynTokenStream,
     self_ty: &Type, impl_generics: &Generics,
     methods: &[MethodInfo], synthetic_methods: &[ImplItemMethod],
 ) -> SynTokenStream {
@@ -348,7 +348,8 @@ fn create_impls(
         match info {
             MethodInfo::EventHandler { phase, sig } => {
                 let (phantom, tts) = create_normal_handler(
-                    crate_name, i, methods.len(), self_ty, impl_generics, phase, sig,
+                    crate_name, discriminator,
+                    i, methods.len(), self_ty, impl_generics, phase, sig,
                 );
                 impls.extend(tts);
                 stages.push(CallStage::new(
@@ -375,7 +376,7 @@ fn create_impls(
             make_merge_event_handler(
                 crate_name,
                 EventHandlerTarget::Type(self_ty), impl_generics,
-                Some(quote! { #crate_name::private::HandlerImplBlock }),
+                Some(discriminator.clone()),
                 vec![group], Vec::new(),
             )
         );
@@ -407,6 +408,7 @@ pub struct EventsImplAttr {
     emit_input: bool,
     impl_input: ItemImpl,
     crate_name: SynTokenStream,
+    discriminator: SynTokenStream,
 }
 impl EventsImplAttr {
     /// Parses an impl block.
@@ -441,7 +443,8 @@ impl EventsImplAttr {
                 synthetic_methods: Vec::new(),
                 emit_input: false,
                 impl_input: impl_block.clone(),
-                crate_name,
+                crate_name: crate_name.clone(),
+                discriminator: quote!(#crate_name::private::HandlerImplBlock),
             })
         }
     }
@@ -461,6 +464,11 @@ impl EventsImplAttr {
         Ok(Self::new(&mut parse(toks)?, None)?.mark_emit_input())
     }
 
+    /// Sets the discriminator of the generated impl block.
+    pub fn set_discriminator(&mut self, toks: impl ToTokens) {
+        self.discriminator = toks.into_token_stream();
+    }
+
     /// Processes an synthetic method, emitting it alongside the method's other impls.
     pub fn process_synthetic_method_obj(&mut self, method: impl ToTokens) -> Result<()> {
         let mut method: ImplItemMethod = parse2(method.into_token_stream())?;
@@ -477,7 +485,7 @@ impl EventsImplAttr {
     /// Generates an impl block for the event handler implementation.
     pub fn generate(self) -> SynTokenStream {
         let impls = create_impls(
-            &self.crate_name,
+            &self.crate_name, &self.discriminator,
             &self.self_ty, &self.impl_generics, &self.methods, &self.synthetic_methods,
         );
         if self.emit_input {
