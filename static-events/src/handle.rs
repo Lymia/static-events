@@ -7,17 +7,17 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::process::abort;
 use parking_lot::{RwLock, RwLockWriteGuard};
 
-use crate::handlers::{Handler, SyncEvents};
+use crate::handlers::{Handler, Events};
 
 #[derive(Debug)]
-enum Status<E: SyncEvents> {
+enum Status<E: Events> {
     Inactive,
     Active(Handler<E>),
     Shutdown,
 }
 
 #[derive(Debug)]
-struct HandleData<E: SyncEvents> {
+struct HandleData<E: Events> {
     status: RwLock<Status<E>>, shutdown_initialized: AtomicBool,
 }
 
@@ -29,13 +29,13 @@ pub fn already_shut_down() -> ! {
 
 /// A wrapper around a [`Handler`] designed to help with graceful shutdowns.
 #[derive(Debug)]
-pub struct EventsHandle<E: SyncEvents>(Arc<HandleData<E>>);
-impl <E: SyncEvents> Clone for EventsHandle<E> {
+pub struct EventsHandle<E: Events>(Arc<HandleData<E>>);
+impl <E: Events> Clone for EventsHandle<E> {
     fn clone(&self) -> Self {
         EventsHandle(self.0.clone())
     }
 }
-impl <E: SyncEvents> EventsHandle<E> {
+impl <E: Events> EventsHandle<E> {
     pub fn new() -> EventsHandle<E> {
         EventsHandle(Arc::new(HandleData {
             status: RwLock::new(Status::Inactive),

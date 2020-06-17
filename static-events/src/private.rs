@@ -56,7 +56,7 @@ pub trait UniversalEventHandler<
         &'a self, target: &'a Handler<E>, ev: &'a mut Ev, state: &'a mut Ev::State,
     ) -> EventResult;
 
-    type FutureType: Future<Output = EventResult>;
+    type FutureType: Future<Output = EventResult> + Send;
     fn on_phase_async(
         &'a self, target: &'a Handler<E>, ev: &'a mut Ev, state: &'a mut Ev::State,
     ) -> Self::FutureType;

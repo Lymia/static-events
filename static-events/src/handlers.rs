@@ -34,7 +34,7 @@ phases! {
 pub enum DefaultHandler { }
 
 /// The base trait used to mark event dispatchers.
-pub trait Events: 'static + Sized {
+pub trait Events: Sync + Send + Sized + 'static {
     /// Gets a service from this event dispatch.
     fn get_service<S>(&self) -> Option<&S>;
 }
@@ -62,7 +62,7 @@ pub trait EventHandler<'a, E: Events, Ev: Event + 'a, P: EventPhase, D = Default
     ) -> EventResult;
 
     /// The type of the future returned by `on_phase_async`.
-    type FutureType: Future<Output = EventResult> + 'a;
+    type FutureType: Future<Output = EventResult> + Send + 'a;
 
     /// Runs a phase of this event asynchronously.
     ///
@@ -224,7 +224,3 @@ impl <E: Events> Clone for Handler<E> {
         Handler(self.0.clone())
     }
 }
-
-/// An [`Events`] that can be shared between threads.
-pub trait SyncEvents: Events + Sync + Send { }
-impl <T: Events + Sync + Send> SyncEvents for T { }

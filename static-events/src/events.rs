@@ -43,12 +43,12 @@ impl From<()> for EventResult {
 #[allow(unused_imports)] use self::EventResult::EvOk; // for documentation
 
 /// The generic trait that defines an event.
-pub trait Event: Sized {
+pub trait Event: Sized + Send {
     /// The type of state stored on the stack during event dispatch.
     ///
     /// A value of this type is constructed at the start of event dispatch by calling the
     /// `starting_state` method.
-    type State;
+    type State: Send;
     /// The type of the state that event handlers receive. This can be distinct from `State`,
     /// allowing a part of the state to be hidden from event handlers.
     ///
@@ -78,12 +78,12 @@ pub trait Event: Sized {
 }
 
 /// An [`Event`] that does not use the `MethodRetVal` or `StateArg` mechanisms.
-pub trait SimpleInterfaceEvent: Sized {
+pub trait SimpleInterfaceEvent: Sized + Send {
     /// The type of state stored on the stack during event dispatch, and passed to event handlers.
     ///
     /// A value of this type is constructed at the start of event dispatch by calling the
     /// `starting_state` method.
-    type State;
+    type State: Send;
     /// The ultimate return type of a call to this event.
     type RetVal;
 
@@ -113,12 +113,12 @@ impl <T : SimpleInterfaceEvent> Event for T {
 }
 
 /// An [`Event`] that returns `State` directly when called.
-pub trait SimpleEvent: Sized {
+pub trait SimpleEvent: Sized + Send {
     /// The type of the state maintained between event handler calls and returned from this event.
     ///
     /// A value of this type is constructed at the start of event dispatch by calling the
     /// `starting_state` method.
-    type State;
+    type State: Send;
     /// Constructs the state maintained during an event dispatch.
     fn starting_state(&self, _: &Handler<impl Events>) -> Self::State;
 }
@@ -135,7 +135,7 @@ impl <T : SimpleEvent> SimpleInterfaceEvent for T {
 }
 
 /// An [`Event`] that returns no value and stores no state.
-pub trait VoidEvent: Sized { }
+pub trait VoidEvent: Sized + Send { }
 impl <T : VoidEvent> SimpleEvent for T {
     type State = ();
     fn starting_state(&self, _: &Handler<impl Events>) {  }

@@ -26,8 +26,8 @@
 /// pub struct MyEventB(u32);
 /// simple_event!(MyEventB, u32);
 ///
-/// pub struct MyEventC<T>(T);
-/// simple_event!([T] MyEventC<T>, u32, 42);
+/// pub struct MyEventC<T: Send>(T);
+/// simple_event!([T: Send] MyEventC<T>, u32, 42);
 /// ```
 ///
 /// Usage:
@@ -150,8 +150,8 @@ macro_rules! self_event {
 /// pub struct MyEvent(u32);
 /// failable_event!(MyEvent, u32, io::Error);
 ///
-/// pub struct MyEvent2<T>(T);
-/// failable_event!([T] MyEvent2<T>, u32, io::Error);
+/// pub struct MyEvent2<T: Send>(T);
+/// failable_event!([T: Send] MyEvent2<T>, u32, io::Error);
 /// ```
 ///
 /// Usage:

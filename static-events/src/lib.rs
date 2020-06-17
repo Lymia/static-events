@@ -2,8 +2,9 @@
 
 // TODO: Implement filtering of some kind on events, and state between phases.
 // TODO: Document how to set the phase of an event handler.
+// TODO: Refactor out a synchronous-only API that does not bound on Sync/etc.
 
-//! A generic zero-cost event handler system built on compile-time magic.
+//! A generic zero-cost asynchronous event handler system built on compile-time magic.
 //!
 //! Synchronous event dispatches should get compiled down to a plain function that executes all
 //! handlers involved with no dynamic dispatches. Asynchrnous event dispatches should be
@@ -124,7 +125,7 @@ pub mod handlers;
 pub use crate::events::{Event, EventResult};
 pub use crate::events::EventResult::*;
 pub use crate::handle::EventsHandle;
-pub use crate::handlers::{Events, SyncEvents, Handler};
+pub use crate::handlers::{Events, Handler};
 pub use crate::handlers::{EvInit, EvCheck, EvBeforeEvent, EvOnEvent, EvAfterEvent};
 
 // Fixes for documentation.
