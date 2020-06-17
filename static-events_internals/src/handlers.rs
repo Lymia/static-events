@@ -470,7 +470,7 @@ impl EventsImplAttr {
     }
 
     /// Processes an synthetic method, emitting it alongside the method's other impls.
-    pub fn process_synthetic_method_obj(&mut self, method: impl ToTokens) -> Result<()> {
+    pub fn process_synthetic_method(&mut self, method: impl ToTokens) -> Result<()> {
         let mut method: ImplItemMethod = parse2(method.into_token_stream())?;
         match MethodInfo::for_method(&self.crate_name, &mut method) {
             Ok(Some(handler)) => self.methods.push(handler),
