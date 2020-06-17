@@ -338,8 +338,8 @@ fn create_normal_handler(
 }
 fn create_impls(
     crate_name: &SynTokenStream, discriminator: &SynTokenStream,
-    self_ty: &Type, impl_generics: &Generics,
-    methods: &[MethodInfo], synthetic_methods: &[ImplItemMethod],
+    self_ty: &Type, impl_generics: &Generics, methods: &[MethodInfo],
+    synthetic_methods: &[ImplItemMethod], extra_items: &[SynTokenStream],
 ) -> SynTokenStream {
     let mut impls = SynTokenStream::new();
     let mut stages = Vec::new();
@@ -386,6 +386,7 @@ fn create_impls(
         #[allow(non_snake_case)]
         const _: () = {
             #impls
+            #(#extra_items)*
             #synthetic_methods
         };
     }
@@ -405,6 +406,7 @@ pub struct EventsImplAttr {
     impl_generics: Generics,
     methods: Vec<MethodInfo>,
     synthetic_methods: Vec<ImplItemMethod>,
+    extra_items: Vec<SynTokenStream>,
     emit_input: bool,
     impl_input: ItemImpl,
     crate_name: SynTokenStream,
@@ -441,6 +443,7 @@ impl EventsImplAttr {
                 impl_generics: impl_block.generics.clone(),
                 methods: handlers,
                 synthetic_methods: Vec::new(),
+                extra_items: Vec::new(),
                 emit_input: false,
                 impl_input: impl_block.clone(),
                 crate_name: crate_name.clone(),
@@ -482,11 +485,17 @@ impl EventsImplAttr {
         Ok(())
     }
 
+    /// Adds an extra item into the const block.
+    pub fn add_extra_item(&mut self, item: impl ToTokens) {
+        self.extra_items.push(item.into_token_stream());
+    }
+
     /// Generates an impl block for the event handler implementation.
     pub fn generate(self) -> SynTokenStream {
         let impls = create_impls(
             &self.crate_name, &self.discriminator,
-            &self.self_ty, &self.impl_generics, &self.methods, &self.synthetic_methods,
+            &self.self_ty, &self.impl_generics, &self.methods,
+            &self.synthetic_methods, &self.extra_items,
         );
         if self.emit_input {
             let input = self.impl_input;
