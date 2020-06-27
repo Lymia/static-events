@@ -34,10 +34,14 @@ phases! {
 pub enum DefaultHandler { }
 
 /// The base trait used to mark event dispatchers.
-pub trait Events: Sync + Send + Sized + 'static {
+pub trait Events: Sized + 'static {
     /// Gets a service from this event dispatch.
     fn get_service<S>(&self) -> Option<&S>;
 }
+
+/// The base trait used to mark asynchronous event dispatchers.
+pub trait SyncEvents: Events + Sync + Send { }
+impl <T: Events + Sync + Send> SyncEvents for T { }
 
 /// A trait that defines a phase of handling a particular event.
 ///
@@ -53,13 +57,18 @@ pub trait EventHandler<'a, E: Events, Ev: Event + 'a, P: EventPhase, D = Default
     /// `true` if this `EventHandler` actually does anything. Used for optimizations.
     const IS_IMPLEMENTED: bool;
 
-    /// `true` if this `EventHandler` is asynchronous. Used for optimizations.
-    const IS_ASYNC: bool;
-
     /// Runs a phase of this event.
     fn on_phase(
         &'a self, target: &'a Handler<E>, ev: &'a mut Ev, state: &'a mut Ev::State,
     ) -> EventResult;
+}
+
+/// A trait that defines a phase of handling a particular event asynchronously.
+pub trait AsyncEventHandler<
+    'a, E: SyncEvents, Ev: Event + 'a, P: EventPhase, D = DefaultHandler,
+> : SyncEvents + EventHandler<'a, E, Ev, P, D> {
+    /// `true` if this `EventHandler` is asynchronous. Used for optimizations.
+    const IS_ASYNC: bool;
 
     /// The type of the future returned by `on_phase_async`.
     type FutureType: Future<Output = EventResult> + Send + 'a;
@@ -74,8 +83,8 @@ pub trait EventHandler<'a, E: Events, Ev: Event + 'a, P: EventPhase, D = Default
 
 #[inline(never)]
 #[cold]
-pub fn missing_service<S>() -> ! {
-    panic!("missing service: {}", std::any::type_name::<S>())
+fn missing_service<S>() -> ! {
+    panic!("Missing service: {}", std::any::type_name::<S>())
 }
 
 #[derive(Default, Debug)]
@@ -138,8 +147,8 @@ impl <E: Events> Handler<E> {
     /// Dispatches an event synchronously.
     ///
     /// Any asynchronous event handlers are polled until completion.
-    pub fn dispatch<Ev: Event>(&self, mut ev: Ev) -> Ev::RetVal {
-        let mut state = ev.starting_state(self);
+    pub fn dispatch_sync<Ev: Event>(&self, mut ev: Ev) -> Ev::RetVal {
+        let mut state = ev.starting_state();
         'outer: loop {
             macro_rules! do_phase {
                 ($phase:ident) => {
@@ -160,17 +169,26 @@ impl <E: Events> Handler<E> {
             do_phase!(EvAfterEvent);
             break 'outer
         }
-        ev.to_return_value(self, state)
+        ev.to_return_value(state)
     }
 
+    /// Returns the number of active references to this `Handler`.
+    pub fn refcount(&self) -> usize {
+        Arc::strong_count(&self.0)
+    }
+}
+
+impl <E: SyncEvents> Handler<E> {
     /// Dispatches an event asynchronously. This future is bounded by the lifetime of `&self`
     /// and the event.
     ///
     /// Any synchronous events are run immediately as part of the [`Future::poll`] execution.
-    pub async fn dispatch_async<'a, Ev: Event + 'a>(
+    ///
+    /// This method requires that the [`Events`] type parameter is [`Sync`].
+    pub async fn dispatch_async<'a, Ev: SyncEvent + 'a>(
         &'a self, mut ev: Ev,
     ) -> Ev::RetVal {
-        let mut state = ev.starting_state(self);
+        let mut state = ev.starting_state();
         'outer: loop {
             macro_rules! do_phase {
                 ($phase:ident) => {
@@ -199,24 +217,21 @@ impl <E: Events> Handler<E> {
             do_phase!(EvAfterEvent);
             break 'outer
         }
-        ev.to_return_value(self, state)
+        ev.to_return_value(state)
     }
 
     /// Dispatches an event asynchronously.
     ///
     /// Any synchronous events are run immediately as part of the [`Future::poll`] execution.
-    pub fn dispatch_async_static<Ev: Event + 'static>(
+    ///
+    /// This method requires that the [`Events`] type parameter is [`Sync`].
+    pub fn dispatch_async_static<Ev: SyncEvent + 'static>(
         &self, ev: Ev,
     ) -> impl Future<Output = Ev::RetVal> + 'static {
         let this = self.clone();
         async move {
             this.dispatch_async(ev).await
         }
-    }
-
-    /// Returns the number of active references to this `Handler`.
-    pub fn refcount(&self) -> usize {
-        Arc::strong_count(&self.0)
     }
 }
 impl <E: Events> Clone for Handler<E> {

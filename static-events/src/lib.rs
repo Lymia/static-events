@@ -3,6 +3,11 @@
 // TODO: Implement filtering of some kind on events, and state between phases.
 // TODO: Document how to set the phase of an event handler.
 // TODO: Refactor out a synchronous-only API that does not bound on Sync/etc.
+//       (design: split out async EventHandler, async requires a Send bound on event.)
+//       (design: require a Send+Sync bound on Events for async.)
+//       (design: split out async/sync preludes.)
+// TODO: Provide a way to provide a `Handle` with a means to control how it runs async code in
+//       synchronous contexts.
 
 //! A generic zero-cost asynchronous event handler system built on compile-time magic.
 //!

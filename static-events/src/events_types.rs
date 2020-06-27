@@ -59,7 +59,7 @@ macro_rules! simple_event {
     ([$($bounds:tt)*] $ev:ty, $state:ty, $starting_val:expr $(,)?) => {
         impl <$($bounds)*> $crate::events::SimpleEvent for $ev {
             type State = $state;
-            fn starting_state(&self, _: &$crate::Handler<impl $crate::Events>) -> $state {
+            fn starting_state(&self) -> $state {
                 $starting_val
             }
         }
@@ -116,10 +116,8 @@ macro_rules! self_event {
         impl <$($bounds)*> $crate::events::SimpleInterfaceEvent for $ev {
             type State = ();
             type RetVal = $ev;
-            fn starting_state(&self, _: &$crate::Handler<impl $crate::Events>) { }
-            fn to_return_value(
-                self, _: &$crate::Handler<impl $crate::Events>, _: (),
-            ) -> $ev {
+            fn starting_state(&self) { }
+            fn to_return_value(self, _: ()) -> $ev {
                 self
             }
         }
@@ -187,9 +185,7 @@ macro_rules! failable_event {
             type StateArg = $state;
             type MethodRetVal = $crate::private::FailableReturn<$error>;
             type RetVal = $crate::private::Result<$state, $error>;
-            fn starting_state(
-                &self, _: &$crate::Handler<impl $crate::Events>,
-            ) -> $crate::private::Result<$state, $error> {
+            fn starting_state(&self) -> $crate::private::Result<$state, $error> {
                 Ok($starting_val)
             }
             fn borrow_state<'a>(
@@ -210,8 +206,7 @@ macro_rules! failable_event {
                 }
             }
             fn to_return_value(
-                self, _: &$crate::Handler<impl $crate::Events>,
-                state: $crate::private::Result<$state, $error>,
+                self, state: $crate::private::Result<$state, $error>,
             ) -> $crate::private::Result<$state, $error> {
                 state
             }
