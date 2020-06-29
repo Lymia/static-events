@@ -2,7 +2,6 @@
 
 // TODO: Implement filtering of some kind on events, and state between phases.
 // TODO: Document how to set the phase of an event handler.
-// TODO: Forbid async event handlers in sync event handlers.
 
 //! A generic zero-cost asynchronous event handler system built on compile-time magic.
 //!

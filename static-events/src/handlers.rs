@@ -1,8 +1,6 @@
 //! The underlying traits used to define event handlers.
 
 use crate::events::*;
-use futures::FutureExt;
-use futures::future::LocalBoxFuture;
 use std::fmt;
 use std::future::Future;
 use std::sync::Arc;
@@ -87,53 +85,19 @@ pub trait AsyncEventHandler<
     ) -> Self::FutureType;
 }
 
-/// A trait to help execute asynchronous event handlers in sync contents.
-pub trait SyncFutureExecutor: Send + Sync + 'static {
-    fn block_on(&self, fut: LocalBoxFuture<'_, ()>);
-}
-
-/// A builder for a [`Handler`].
-#[derive(Default)]
-pub struct HandlerBuilder<E: Events>(HandlerData<E>);
-impl <E: Events> HandlerBuilder<E> {
-    /// Creates a new [`HandlerBuilder`] with a given [`Events`].
-    pub fn new(e: E) -> Self {
-        HandlerBuilder(HandlerData {
-            events: e,
-            async_ctx: None,
-        })
-    }
-
-    /// Creates a [`Handler`] from this builder.
-    pub fn build(self) -> Handler<E> {
-        Handler(Arc::new(self.0))
-    }
-}
-impl <E: AsyncEvents> HandlerBuilder<E> {
-    /// Sets the executor this builder uses to run async events in synchronous dispatches.
-    pub fn future_executor(mut self, executor: impl SyncFutureExecutor) -> HandlerBuilder<E> {
-        self.0.async_ctx = Some(Box::new(executor));
-        self
-    }
-}
-
 /// A wrapper for [`Events`] that allows dispatching events into them.
 #[derive(Default)]
 pub struct Handler<E: Events>(Arc<HandlerData<E>>);
 #[derive(Default)]
 struct HandlerData<E: Events> {
     events: E,
-    async_ctx: Option<Box<dyn SyncFutureExecutor>>,
 }
 impl <E: Events> Handler<E> {
     /// Wraps an [`Events`] to allow dispatching events into it.
     pub fn new(e: E) -> Self {
-        Self::builder(e).build()
-    }
-
-    /// Creates a new [`HandlerBuilder`] with a given [`Events`].
-    pub fn builder(e: E) -> HandlerBuilder<E> {
-        HandlerBuilder::new(e)
+        Handler(Arc::new(HandlerData {
+            events: e,
+        }))
     }
 
     /// Retrieves a service from an [`Events`].
@@ -188,11 +152,12 @@ impl <E: Events> Handler<E> {
 
     /// Dispatches an event synchronously.
     ///
-    /// Any asynchronous event handlers are polled until completion.
-    ///
-    /// If this `Handler` does not contain a [`SyncFutureExecutor`], this function will panic if
-    /// the event dispatches to any async event handlers.
+    /// Any asynchronous event handlers will cause this function to panic.
     pub fn dispatch_sync<Ev: Event>(&self, mut ev: Ev) -> Ev::RetVal {
+        if crate::private::is_any_async::<E, Ev>() {
+            crate::private::async_in_sync();
+        }
+
         let mut state = ev.starting_state();
         'outer: loop {
             macro_rules! do_phase {
@@ -223,22 +188,6 @@ impl <E: Events> Handler<E> {
     }
 }
 impl <E: AsyncEvents> Handler<E> {
-    /// Blocks on a future in the context of this handler.
-    ///
-    /// This uses the [`SyncFutureExecutor`] contained in this handler, and panics if one is not
-    /// available.
-    pub fn block_on_future<T>(&self, fut: impl Future<Output = T>) -> T {
-        let mut result = None;
-        match self.0.async_ctx.as_ref() {
-            Some(x) => x.block_on(async { result = Some(fut.await); }.boxed_local()),
-            None => no_async_executor(),
-        }
-        match result {
-            Some(x) => x,
-            None => internal_async_executor_err(),
-        }
-    }
-
     /// Dispatches an event asynchronously. This future is bounded by the lifetime of `&self`
     /// and the event.
     ///
@@ -315,17 +264,4 @@ impl <E: Events + Debug> Debug for Handler<E> {
 #[cold]
 fn missing_service<S>() -> ! {
     panic!("Missing service: {}", std::any::type_name::<S>())
-}
-
-#[inline(never)]
-#[cold]
-fn no_async_executor() -> ! {
-    panic!("An async handler was found during a synchronous events dispatch, and no \
-            `SyncFutureExecutor` available in the given context.")
-}
-
-#[inline(never)]
-#[cold]
-fn internal_async_executor_err() -> ! {
-    panic!("Given `SyncFutureExecutor` instance did not run the future?")
 }

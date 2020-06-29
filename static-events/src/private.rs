@@ -22,15 +22,45 @@ pub fn event_error() -> ! {
 
 #[inline(never)]
 #[cold]
-pub fn async_panicked_error() -> ! {
-    panic!("poll on panicked future")
+pub fn async_in_sync() -> ! {
+    panic!("events containing asynchronous handlers cannot be called in \
+            synchronous dispatches or contexts.")
 }
 
+/// Casts a `Handler<impl Events>` to a `Handler<impl AsyncEvents>`
+pub fn handler_as_sync_handler<E: Events>(handler: &Handler<E>) -> &Handler<impl AsyncEvents> {
+    DowncastEvents::as_async_events(handler)
+}
 #[inline(never)]
 #[cold]
-pub fn async_already_done_error() -> ! {
-    panic!("poll on completed future")
+fn async_handler_in_sync() -> ! {
+    panic!("this event handler requires an asynchronous event dispatch")
 }
+trait DowncastEvents: Events {
+    type AsAsyncEvents: AsyncEvents;
+    fn as_async_events(handler: &Handler<Self>) -> &Handler<Self::AsAsyncEvents>;
+}
+impl <E: Events> DowncastEvents for E {
+    default type AsAsyncEvents = NullAsyncEvents;
+    default fn as_async_events(_: &Handler<Self>) -> &Handler<Self::AsAsyncEvents> {
+        async_handler_in_sync()
+    }
+}
+impl <E: AsyncEvents> DowncastEvents for E {
+    type AsAsyncEvents = E;
+    fn as_async_events(handler: &Handler<Self>) -> &Handler<Self::AsAsyncEvents> {
+        handler
+    }
+}
+
+/// An `AsyncEvents` of which no instances should exist.
+pub enum NullAsyncEvents { }
+impl Events for NullAsyncEvents {
+    fn get_service<S>(&self) -> Option<&S> {
+        event_error()
+    }
+}
+impl AsyncEvents for NullAsyncEvents { }
 
 /// A future of which no instances should exist. Used as a the future type when no async future
 /// is defined.
@@ -118,6 +148,15 @@ pub const fn is_implemented<'a, T: Events, E: Events, Ev: Event + 'a, P: EventPh
 #[inline(always)]
 pub const fn is_async<'a, T: Events, E: Events, Ev: Event + 'a, P: EventPhase, D>() -> bool {
     <T as UniversalEventHandler<'a, E, Ev, P, D>>::IS_ASYNC
+}
+
+#[inline(always)]
+pub const fn is_any_async<'a, E: Events, Ev: Event + 'a>() -> bool {
+    is_async::<'a, E, E, Ev, EvInit, DefaultHandler>() ||
+        is_async::<'a, E, E, Ev, EvCheck, DefaultHandler>() ||
+        is_async::<'a, E, E, Ev, EvBeforeEvent, DefaultHandler>() ||
+        is_async::<'a, E, E, Ev, EvOnEvent, DefaultHandler>() ||
+        is_async::<'a, E, E, Ev, EvAfterEvent, DefaultHandler>()
 }
 
 #[inline(always)]

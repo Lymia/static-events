@@ -19,6 +19,8 @@ std = ["parking_lot"]
 default = ["std"]
 
 [dependencies]
-futures = "0.3"
 parking_lot = { version = "0.10.0", optional = true }
 static-events_derive = { version = "0.1.0", path = "../static-events_derive" }
+
+[dev-dependencies]
+futures = "0.3"

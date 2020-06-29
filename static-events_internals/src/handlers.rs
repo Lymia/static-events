@@ -141,14 +141,22 @@ impl HandlerSig {
         Ok(handler_sig)
     }
 
-    fn make_body(&self, self_ty: &Type) -> EventHandlerBody {
+    fn make_body(
+        &self, crate_name: &SynTokenStream, self_ty: &Type, is_async_handler: bool,
+    ) -> EventHandlerBody {
         let name = &self.fn_name;
         let call = match self.self_param {
             Some(_) => quote! { _self.#name },
             None    => quote! { <#self_ty>::#name },
         };
         let target = match self.target_param {
-            Some(_) => quote! { _target, },
+            Some(_) => if is_async_handler {
+                // this is a hack to allow the (slightly sloppy) `AsyncEvents` bound in sync
+                // handlers defined in async events.
+                quote! { #crate_name::private::handler_as_sync_handler(_target), }
+            } else {
+                quote! { _target, }
+            },
             None    => quote! {},
         };
         let state = match self.state_param {
@@ -263,24 +271,23 @@ fn create_normal_handler(
     let async_generics = merge_generics(&merged_generics, &async_generics);
     let (async_bounds, async_ty, async_where_bounds) = async_generics.split_for_impl();
 
-    let (is_async, sync_body, future_ty, async_defs, async_body) = match sig.make_body(self_ty) {
+    let body = sig.make_body(crate_name, self_ty, is_async_handler);
+    let (is_async, sync_body, future_ty, async_defs, async_body) = match body {
         EventHandlerBody::Sync(sync_body) => (
             false,
-            quote! {{
+            quote! {
+                use #crate_name::events::Event;
                 let _self = self;
-                #sync_body
-            }},
+                let ev_result = (#sync_body).into();
+                _ev.to_event_result(_state, ev_result)
+            },
             quote! { #crate_name::private::NullFuture },
             quote! { },
             quote! { #crate_name::private::event_error() },
         ),
         EventHandlerBody::Async(async_body) => (
             true,
-            quote! {
-                #crate_name::private::block_on(
-                    #async_fn(self, _target, _ev, _state)
-                )
-            },
+            quote! { #crate_name::private::async_in_sync() },
             quote! { #existential #async_ty },
             quote! {
                 async fn #async_fn #async_bounds (
@@ -350,9 +357,7 @@ fn create_normal_handler(
                 _ev: &'__EventLifetime mut #event_ty,
                 _state: &'__EventLifetime mut #event_ty_event::State,
             ) -> #crate_name::events::EventResult {
-                use #crate_name::events::Event;
-                let ev_result = (#sync_body).into();
-                _ev.to_event_result(_state, ev_result)
+                #sync_body
             }
         }
         #async_impl
