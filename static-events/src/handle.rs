@@ -14,14 +14,15 @@ use crate::handlers::{Handler, Events};
 enum Status<E: Events> {
     Inactive,
     Active(Handler<E>),
+    InShutdown(Handler<E>),
     Shutdown,
+    InvalidState,
 }
 
 #[derive(Debug)]
 struct HandleData<E: Events> {
     status: RwLock<Status<E>>,
     shutdown_initialized: AtomicBool,
-    is_shutdown: AtomicBool,
 }
 
 #[inline(never)]
@@ -43,7 +44,6 @@ impl <E: Events> EventsHandle<E> {
         EventsHandle(Arc::new(HandleData {
             status: RwLock::new(Status::Inactive),
             shutdown_initialized: AtomicBool::new(false),
-            is_shutdown: AtomicBool::new(false),
         }))
     }
 
@@ -62,17 +62,19 @@ impl <E: Events> EventsHandle<E> {
         self.0.shutdown_initialized.load(Ordering::SeqCst) || match &*self.0.status.read() {
             Status::Inactive => panic!("EventsHandle not yet active."),
             Status::Active(_) => false,
-            Status::Shutdown => true,
+            Status::InShutdown(_) | Status::Shutdown => true,
+            Status::InvalidState => panic!("EventsHandle in invalid state."),
         }
     }
 
     /// Gets the number of active handlers from this handle, or handles cloned from it.
     pub fn lock_count(&self) -> usize {
-        let is_shutdown = self.0.is_shutdown.load(Ordering::SeqCst);
         match &*self.0.status.read() {
             Status::Inactive => panic!("EventsHandle not yet active."),
-            Status::Active(handler) => handler.refcount() - if is_shutdown { 0 } else { 1 },
+            Status::Active(handler) | Status::InShutdown(handler) =>
+                handler.refcount() - 1,
             Status::Shutdown => 0,
+            Status::InvalidState => panic!("EventsHandle in invalid state."),
         }
     }
 
@@ -82,9 +84,8 @@ impl <E: Events> EventsHandle<E> {
         }
     }
     fn internal_shutdown(&self, mut lock: RwLockWriteGuard<Status<E>>) {
-        if let Status::Active(_) = &*lock {
-            self.0.is_shutdown.store(true, Ordering::SeqCst);
-            *lock = Status::Shutdown;
+        if let Status::Active(handler) = std::mem::replace(&mut *lock, Status::InvalidState) {
+            *lock = Status::InShutdown(handler);
         } else {
             panic!("Attempt to shutdown a EventsHandle twice! (unreachable case?)");
         }
@@ -104,6 +105,7 @@ impl <E: Events> EventsHandle<E> {
         while self.lock_count() != 0 {
             thread::sleep(Duration::from_millis(1));
         }
+        *self.0.status.write() = Status::Shutdown;
     }
 
     /// Stops any further messages from being sent to this `EventsHandle`, and drops the
@@ -129,7 +131,7 @@ impl <E: Events> EventsHandle<E> {
             }
 
             if is_shutdown && self.lock_count() == 0 {
-                return
+                break
             }
 
             let now = Instant::now();
@@ -141,6 +143,7 @@ impl <E: Events> EventsHandle<E> {
                 thread::sleep(Duration::from_millis(1));
             }
         }
+        *self.0.status.write() = Status::Shutdown;
     }
 
     /// Returns the underlying [`Handler`], or panics if it has already been shut down.
@@ -161,7 +164,8 @@ impl <E: Events> EventsHandle<E> {
             match &*lock {
                 Status::Inactive => panic!("DispatchHandle not yet active."),
                 Status::Active(handler) => Some(handler.clone()),
-                Status::Shutdown => None,
+                Status::InShutdown(_) | Status::Shutdown => None,
+                Status::InvalidState => panic!("EventsHandle in invalid state."),
             }
         }
     }
