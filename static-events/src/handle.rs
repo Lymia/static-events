@@ -2,7 +2,8 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::process::abort;
 use parking_lot::{RwLock, RwLockWriteGuard};
@@ -95,6 +96,9 @@ impl <E: Events> EventsHandle<E> {
     pub fn shutdown(&self) {
         self.initialize_shutdown();
         self.internal_shutdown(self.0.status.write());
+        while self.lock_count() != 0 {
+            thread::sleep(Duration::from_millis(1));
+        }
     }
 
     /// Stops any further messages from being sent to this `EventsHandle`, and drops the
@@ -108,13 +112,28 @@ impl <E: Events> EventsHandle<E> {
     /// This function panics if an attempt is made to shutdown a handle twice.
     pub fn shutdown_with_progress(&self, interval: Duration, mut progress_fn: impl FnMut()) {
         self.initialize_shutdown();
+
+        let mut is_shutdown = false;
+        let mut next_message = Instant::now() + interval;
         loop {
-            if let Some(lock) = self.0.status.try_write_for(interval) {
-                self.internal_shutdown(lock);
+            if !is_shutdown {
+                if let Some(lock) = self.0.status.try_write_for(interval) {
+                    self.internal_shutdown(lock);
+                    is_shutdown = true;
+                }
+            }
+
+            if is_shutdown && self.lock_count() == 0 {
                 return
             }
-            if catch_unwind(AssertUnwindSafe(|| progress_fn())).is_err() {
-                abort();
+
+            let now = Instant::now();
+            if now > next_message {
+                if catch_unwind(AssertUnwindSafe(|| progress_fn())).is_err() {
+                    abort();
+                }
+                next_message = now + interval;
+                thread::sleep(Duration::from_millis(1));
             }
         }
     }
