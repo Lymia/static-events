@@ -46,6 +46,8 @@ pub trait Events: Sized + 'static {
 /// The base trait used to mark asynchronous event dispatchers.
 pub trait SyncEvents: Events + Sync + Send { }
 
+pub use static_events_derive::*;
+
 /// A trait that defines a phase of handling a particular event.
 ///
 /// # Type parameters
@@ -141,8 +143,9 @@ impl <E: Events> Handler<E> {
     /// This function will panic if the service does not exist.
     ///
     /// # Example
-    /// ```
-    /// # use static_events::*;
+    /// ```rust
+    /// use static_events::prelude_sync::*;
+    ///
     /// #[derive(Eq, PartialEq, Debug)]
     /// struct TestService;
     ///
@@ -162,8 +165,9 @@ impl <E: Events> Handler<E> {
     /// Retrieves a service that may or may not exist from an [`Events`].
     ///
     /// # Example
-    /// ```
-    /// # use static_events::*;
+    /// ```rust
+    /// use static_events::prelude_sync::*;
+    ///
     /// #[derive(Eq, PartialEq, Debug)]
     /// struct TestService;
     ///
@@ -241,39 +245,43 @@ impl <E: SyncEvents> Handler<E> {
     /// Any synchronous events are run immediately as part of the [`Future::poll`] execution.
     ///
     /// This method requires that the [`Events`] type parameter is [`Sync`].
-    pub async fn dispatch_async<'a, Ev: SyncEvent + 'a>(
+    pub fn dispatch_async<'a, Ev: SyncEvent + 'a>(
         &'a self, mut ev: Ev,
-    ) -> Ev::RetVal {
-        let mut state = ev.starting_state();
-        'outer: loop {
-            macro_rules! do_phase {
-                ($phase:ident) => {
-                    if crate::private::is_implemented::<E, E, Ev, $phase, DefaultHandler>() {
-                        let result =
-                            if crate::private::is_async::<E, E, Ev, $phase, DefaultHandler>() {
-                                crate::private::on_phase_async::<E, E, Ev, $phase, DefaultHandler>(
-                                    &self.0.events, self, &mut ev, &mut state
-                                ).await
-                            } else {
-                                crate::private::on_phase::<E, E, Ev, $phase, DefaultHandler>(
-                                    &self.0.events, self, &mut ev, &mut state
-                                )
-                            };
-                        match result {
-                            EventResult::EvOk | EventResult::EvCancelStage => { }
-                            EventResult::EvCancel => break 'outer,
+    ) -> impl Future<Output = Ev::RetVal> + 'a {
+        async move {
+            let mut state = ev.starting_state();
+            'outer: loop {
+                macro_rules! do_phase {
+                    ($phase:ident) => {
+                        if crate::private::is_implemented::<E, E, Ev, $phase, DefaultHandler>() {
+                            let result =
+                                if crate::private::is_async::<E, E, Ev, $phase, DefaultHandler>() {
+                                    crate::private::on_phase_async::<
+                                        E, E, Ev, $phase, DefaultHandler,
+                                    >(
+                                        &self.0.events, self, &mut ev, &mut state
+                                    ).await
+                                } else {
+                                    crate::private::on_phase::<E, E, Ev, $phase, DefaultHandler>(
+                                        &self.0.events, self, &mut ev, &mut state
+                                    )
+                                };
+                            match result {
+                                EventResult::EvOk | EventResult::EvCancelStage => { }
+                                EventResult::EvCancel => break 'outer,
+                            }
                         }
                     }
                 }
+                do_phase!(EvInit);
+                do_phase!(EvCheck);
+                do_phase!(EvBeforeEvent);
+                do_phase!(EvOnEvent);
+                do_phase!(EvAfterEvent);
+                break 'outer
             }
-            do_phase!(EvInit);
-            do_phase!(EvCheck);
-            do_phase!(EvBeforeEvent);
-            do_phase!(EvOnEvent);
-            do_phase!(EvAfterEvent);
-            break 'outer
+            ev.to_return_value(state)
         }
-        ev.to_return_value(state)
     }
 
     /// Dispatches an event asynchronously.

@@ -19,7 +19,8 @@
 /// Declaration:
 ///
 /// ```
-/// # use static_events::*;
+/// use static_events::prelude_sync::*;
+///
 /// pub struct MyEventA(u32);
 /// simple_event!(MyEventA);
 ///
@@ -32,7 +33,8 @@
 ///
 /// Usage:
 /// ```
-/// # use static_events::*;
+/// use static_events::prelude_sync::*;
+///
 /// # pub struct MyEventB(u32); simple_event!(MyEventB, u32);
 /// #[derive(Events)]
 /// struct MyEventHandler;
@@ -46,7 +48,7 @@
 /// }
 ///
 /// let handler = Handler::new(MyEventHandler);
-/// assert_eq!(handler.dispatch_sync(MyEventB(12)), 144);
+/// assert_eq!(handler.dispatch(MyEventB(12)), 144);
 /// ```
 #[macro_export]
 macro_rules! simple_event {
@@ -85,7 +87,7 @@ macro_rules! simple_event {
 /// Declaration:
 ///
 /// ```
-/// # use static_events::*;
+/// use static_events::prelude_sync::*;
 /// pub struct MyEvent(u32);
 /// self_event!(MyEvent);
 /// ```
@@ -93,7 +95,8 @@ macro_rules! simple_event {
 /// Usage:
 ///
 /// ```
-/// # use static_events::*;
+/// use static_events::prelude_sync::*;
+///
 /// # #[derive(PartialEq, Debug)] pub struct MyEvent(u32);
 /// # self_event!(MyEvent);
 /// #[derive(Events)]
@@ -108,7 +111,7 @@ macro_rules! simple_event {
 /// }
 ///
 /// let handler = Handler::new(MyEventHandler);
-/// assert_eq!(handler.dispatch_sync(MyEvent(10)), MyEvent(100));
+/// assert_eq!(handler.dispatch(MyEvent(10)), MyEvent(100));
 /// ```
 #[macro_export]
 macro_rules! self_event {
@@ -144,7 +147,9 @@ macro_rules! self_event {
 /// Declaration:
 ///
 /// ```
-/// # use static_events::*; use std::io;
+/// use static_events::prelude_sync::*;
+/// # use std::io;
+///
 /// pub struct MyEvent(u32);
 /// failable_event!(MyEvent, u32, io::Error);
 ///
@@ -155,8 +160,10 @@ macro_rules! self_event {
 /// Usage:
 ///
 /// ```
-/// # use static_events::*; use std::io;
+/// use static_events::prelude_sync::*;
+/// # use std::io;
 /// # pub struct MyEvent(u32); failable_event!(MyEvent, u32, ::std::io::Error);
+///
 /// #[derive(Events)]
 /// struct MyEventHandler;
 ///
@@ -171,8 +178,8 @@ macro_rules! self_event {
 /// }
 ///
 /// let handler = Handler::new(MyEventHandler);
-/// assert_eq!(handler.dispatch_sync(MyEvent(12)).ok(), Some(144));
-/// assert!(handler.dispatch_sync(MyEvent(100)).is_err());
+/// assert_eq!(handler.dispatch(MyEvent(12)).ok(), Some(144));
+/// assert!(handler.dispatch(MyEvent(100)).is_err());
 /// ```
 #[macro_export]
 macro_rules! failable_event {
@@ -180,7 +187,7 @@ macro_rules! failable_event {
         failable_event!([$($bounds)*] $ev, $state, $error, Default::default());
     };
     ([$($bounds:tt)*] $ev:ty, $state:ty, $error:ty, $starting_val:expr $(,)?) => {
-        impl <$($bounds)*> $crate::Event for $ev {
+        impl <$($bounds)*> $crate::events::Event for $ev {
             type State = $crate::private::Result<$state, $error>;
             type StateArg = $state;
             type MethodRetVal = $crate::private::FailableReturn<$error>;
@@ -196,12 +203,12 @@ macro_rules! failable_event {
             fn to_event_result(
                 &self, state: &mut $crate::private::Result<$state, $error>,
                 result: $crate::private::FailableReturn<$error>,
-            ) -> $crate::EventResult {
+            ) -> $crate::events::EventResult {
                 match result.0 {
                     Ok(result) => result,
                     Err(err) => {
                         *state = Err(err);
-                        $crate::EvCancel
+                        $crate::events::EventResult::EvCancel
                     }
                 }
             }

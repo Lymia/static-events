@@ -58,7 +58,8 @@
 //!
 //! Example:
 //! ```
-//! # use static_events::*;
+//! use static_events::prelude_sync::*;
+//!
 //! struct MyEvent(u32);
 //! simple_event!(MyEvent, u32, 0);
 //!
@@ -80,7 +81,8 @@
 //! Fields inside the [`Events`] can be marked with `#[subhandler]` to cause any events to be
 //! passed on to another event handler:
 //! ```
-//! # use static_events::*;
+//! use static_events::prelude_sync::*;
+//!
 //! # struct MyEvent(u32); simple_event!(MyEvent, u32, 0);
 //! # #[derive(Default)] struct MyEventHandler;
 //! # #[derive(Events)] #[events(impl_on_external = "MyEventHandler")] struct MyEventHandler2;
@@ -89,6 +91,8 @@
 //! #         *i += ev.0;
 //! #     }
 //! # }
+//! // events are defined as in the previous example
+//!
 //! #[derive(Events, Default)]
 //! struct MyOtherEventHandler;
 //!
@@ -118,20 +122,12 @@
 //! As event handlers are passed around using immutable pointers, locking or cells must be used to
 //! store state.
 
-pub use static_events_derive::{Events, events_impl, event_handler};
-
 mod events_types;
 pub use crate::events_types::*;
 
 pub mod events;
 pub mod handle;
 pub mod handlers;
-
-pub use crate::events::{Event, EventResult};
-pub use crate::events::EventResult::*;
-pub use crate::handle::EventsHandle;
-pub use crate::handlers::{Events, Handler};
-pub use crate::handlers::{EvInit, EvCheck, EvBeforeEvent, EvOnEvent, EvAfterEvent};
 
 // Fixes for documentation.
 #[allow(unused_imports)] use std::fmt::Debug;
@@ -140,3 +136,41 @@ pub use crate::handlers::{EvInit, EvCheck, EvBeforeEvent, EvOnEvent, EvAfterEven
 #[doc(hidden)]
 /// This module is used by static-events_derive, and is not stable API.
 pub mod private;
+
+mod prelude_common {
+    pub use crate::events::{Event, EventResult};
+    pub use crate::events::EventResult::*;
+    pub use crate::handlers::{Handler, event_handler};
+    pub use crate::handlers::{EvInit, EvCheck, EvBeforeEvent, EvOnEvent, EvAfterEvent};
+    pub use crate::{simple_event, self_event, failable_event};
+}
+mod prelude_private {
+    use crate::handlers::*;
+    pub trait Sealed { }
+    impl <E: Events> Sealed for Handler<E> { }
+}
+
+/// A module containing useful imports for synchronous applications.
+pub mod prelude_sync {
+    pub use crate::prelude_common::*;
+    pub use crate::handlers::{Events, events_impl};
+
+    /// A helper extension trait for allowing `Handler::dispatch` as an alias to `dispatch_sync`.
+    pub trait HandlerDispatchExt<E: Events>: crate::prelude_private::Sealed {
+        fn dispatch<Ev: Event>(&self, ev: Ev) -> Ev::RetVal;
+    }
+    impl <E: Events> HandlerDispatchExt<E> for Handler<E> {
+        fn dispatch<Ev: Event>(&self, ev: Ev) -> Ev::RetVal {
+            self.dispatch_sync(ev)
+        }
+    }
+}
+
+/// A module containing useful imports for asynchronous applications.
+#[allow(non_camel_case_types)]
+pub mod prelude_async {
+    pub use crate::prelude_common::*;
+    pub use crate::events::SyncEvent;
+    pub use crate::handle::EventsHandle;
+    pub use crate::handlers::{SyncEvents as Events, sync_events_impl as events_impl};
+}
