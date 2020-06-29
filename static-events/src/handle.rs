@@ -106,7 +106,6 @@ impl <E: Events> EventsHandle<E> {
     /// # Panics
     ///
     /// This function panics if an attempt is made to shutdown a handle twice.
-    #[must_use]
     pub fn shutdown_with_progress(&self, interval: Duration, mut progress_fn: impl FnMut()) {
         self.initialize_shutdown();
         loop {
