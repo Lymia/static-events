@@ -6,10 +6,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Poll, Context};
 
-#[doc(hidden)] pub use futures::executor::block_on;
 #[doc(hidden)] pub use std::result::Result;
-
-// TODO: Fix block_on to work with running asynchronous stuff (internal thread pool?)
 
 /// A hack to allow the `type_alias_impl_trait` feature flag to be contained to this crate.
 #[allow_internal_unstable(type_alias_impl_trait)]
@@ -51,6 +48,7 @@ pub trait UniversalEventHandler<
     'a, E: Events, Ev: Event + 'a, P: EventPhase, D = DefaultHandler,
 >: Events {
     const IS_IMPLEMENTED: bool;
+    const IS_ASYNC: bool;
     fn on_phase(
         &'a self, target: &'a Handler<E>, ev: &'a mut Ev, state: &'a mut Ev::State,
     ) -> EventResult;
@@ -59,6 +57,7 @@ impl <
     'a, E: Events, Ev: Event + 'a, P: EventPhase, D, T: Events,
 > UniversalEventHandler<'a, E, Ev, P, D> for T {
     default const IS_IMPLEMENTED: bool = false;
+    default const IS_ASYNC: bool = false;
     #[inline(always)]
     default fn on_phase(
         &'a self, _: &'a Handler<E>, _: &'a mut Ev, _: &'a mut Ev::State,
@@ -70,6 +69,7 @@ impl <
     'a, E: Events, Ev: Event + 'a, P: EventPhase, D, T: Events + EventHandler<'a, E, Ev, P, D>,
 > UniversalEventHandler<'a, E, Ev, P, D> for T {
     const IS_IMPLEMENTED: bool = <Self as EventHandler<'a, E, Ev, P, D>>::IS_IMPLEMENTED;
+    const IS_ASYNC: bool = <Self as EventHandler<'a, E, Ev, P, D>>::IS_ASYNC;
     #[inline(always)]
     fn on_phase(
         &'a self, target: &'a Handler<E>, ev: &'a mut Ev, state: &'a mut Ev::State,
@@ -81,7 +81,6 @@ impl <
 pub trait UniversalAsyncEventHandler<
     'a, E: SyncEvents, Ev: SyncEvent + 'a, P: EventPhase, D = DefaultHandler,
 >: SyncEvents {
-    const IS_ASYNC: bool;
     type FutureType: Future<Output = EventResult> + Send;
     fn on_phase_async(
         &'a self, target: &'a Handler<E>, ev: &'a mut Ev, state: &'a mut Ev::State,
@@ -90,7 +89,6 @@ pub trait UniversalAsyncEventHandler<
 impl <
     'a, E: SyncEvents, Ev: SyncEvent + 'a, P: EventPhase, D, T: SyncEvents,
 > UniversalAsyncEventHandler<'a, E, Ev, P, D> for T {
-    default const IS_ASYNC: bool = false;
     default type FutureType = NullFuture;
     default fn on_phase_async(
         &'a self, _: &'a Handler<E>, _: &'a mut Ev, _: &'a mut <Ev as Event>::State,
@@ -102,8 +100,6 @@ impl <
     'a, E: SyncEvents, Ev: SyncEvent + 'a, P: EventPhase, D,
     T: SyncEvents + AsyncEventHandler<'a, E, Ev, P, D>,
 > UniversalAsyncEventHandler<'a, E, Ev, P, D> for T {
-    const IS_ASYNC: bool = <Self as AsyncEventHandler<'a, E, Ev, P, D>>::IS_ASYNC;
-
     type FutureType = <Self as AsyncEventHandler<'a, E, Ev, P, D>>::FutureType;
     #[inline(always)]
     fn on_phase_async(
@@ -120,10 +116,8 @@ pub const fn is_implemented<'a, T: Events, E: Events, Ev: Event + 'a, P: EventPh
 }
 
 #[inline(always)]
-pub const fn is_async<
-    'a, T: SyncEvents, E: SyncEvents, Ev: SyncEvent + 'a, P: EventPhase, D,
->() -> bool {
-    <T as UniversalAsyncEventHandler<'a, E, Ev, P, D>>::IS_ASYNC
+pub const fn is_async<'a, T: Events, E: Events, Ev: Event + 'a, P: EventPhase, D>() -> bool {
+    <T as UniversalEventHandler<'a, E, Ev, P, D>>::IS_ASYNC
 }
 
 #[inline(always)]

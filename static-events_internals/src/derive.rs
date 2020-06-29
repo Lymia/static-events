@@ -75,10 +75,13 @@ pub struct DeriveStaticEvents {
     discriminator: Vec<Type>,
     name: Ident,
     input: DeriveInput,
+    is_async_handler: bool,
 }
 impl DeriveStaticEvents {
     /// Parses a derive input block.
-    pub fn new(input: &DeriveInput, crate_name: Option<SynTokenStream>) -> Result<Self> {
+    pub fn new(
+        input: &DeriveInput, crate_name: Option<SynTokenStream>, is_async_handler: bool,
+    ) -> Result<Self> {
         let crate_name = crate_name.unwrap_or(quote! { ::static_events });
 
         let attrs: EventsAttrs = EventsAttrs::from_derive_input(input)?;
@@ -93,6 +96,7 @@ impl DeriveStaticEvents {
             discriminator: Vec::new(),
             name: name.clone(),
             input: input.clone(),
+            is_async_handler,
         };
         match &input.data {
             Data::Struct(input_data) => data.generate_struct(&name, input_data),
@@ -109,13 +113,13 @@ impl DeriveStaticEvents {
     }
 
     /// Parses a token stream.
-    pub fn from_tokens(toks: impl ToTokens) -> Result<Self> {
-        Self::new(&mut parse2(toks.into_token_stream())?, None)
+    pub fn from_tokens(toks: impl ToTokens, is_async_handler: bool) -> Result<Self> {
+        Self::new(&mut parse2(toks.into_token_stream())?, None, is_async_handler)
     }
 
     /// Parses a token stream.
-    pub fn from_tokens_raw(toks: proc_macro::TokenStream) -> Result<Self> {
-        Self::new(&mut parse(toks)?, None)
+    pub fn from_tokens_raw(toks: proc_macro::TokenStream, is_async_handler: bool) -> Result<Self> {
+        Self::new(&mut parse(toks)?, None, is_async_handler)
     }
 
     fn generate_arm(
@@ -230,92 +234,43 @@ impl DeriveStaticEvents {
         let get_service_body = self.get_service_body;
 
         let (impl_bounds, ty_param, where_bounds) = input.generics.split_for_impl();
-
         let dist = Some(quote! { #crate_name::private::HandlerImplBlock });
-        let event_handler = if self.subhandlers_exist || !self.discriminator.is_empty() {
-            let mut common = Vec::new();
+
+        let mut common = Vec::new();
+        common.push(CallStage::new(
+            crate_name, quote! { _this }, quote! { #name #ty_param }, dist,
+        ));
+        for dist in self.discriminator {
             common.push(CallStage::new(
-                crate_name, quote! { _this }, quote! { #name #ty_param }, dist,
-            ));
-            for dist in self.discriminator {
-                common.push(CallStage::new(
-                    crate_name,
-                    quote! { _this }, quote! { #name #ty_param }, Some(quote! { #dist }),
-                ));
-            }
-            make_merge_event_handler(
                 crate_name,
-                EventHandlerTarget::Ident(&name), &input.generics, None, self.arms, common,
-            )
-        } else {
-            let event_generics_raw = quote! {
-                '__EventLifetime,
-                __EventDispatch: #crate_name::Events,
-                __EventType: #crate_name::Event + '__EventLifetime,
-                __EventPhase: #crate_name::handlers::EventPhase + '__EventLifetime,
-            };
-            let event_generics = generics(&event_generics_raw);
-            let handler_generics = merge_generics(&event_generics, &input.generics);
-            let (handler_impl_bounds, handler_ty_param, handler_where_bounds) =
-                handler_generics.split_for_impl();
+                quote! { _this }, quote! { #name #ty_param }, Some(quote! { #dist }),
+            ));
+        }
 
-            let is_implemented_expr = is_implemented(crate_name, quote!(Self), dist.clone());
-            let is_async_expr = is_async(crate_name, quote!(Self), dist.clone());
-
+        let event_handler = make_merge_event_handler(
+            crate_name, self.is_async_handler,
+            EventHandlerTarget::Ident(&name), &input.generics, None, self.arms, common,
+        );
+        let sync_event_impl = if self.is_async_handler {
             quote! {
-                #crate_name::private::allow_existentials! {
-                    (__PassthroughEventFut #handler_impl_bounds #handler_where_bounds)
-                    (::std::future::Future<Output = #crate_name::EventResult> +
-                        '__EventLifetime)
-                }
-                impl #handler_impl_bounds #crate_name::handlers::EventHandler<
-                    '__EventLifetime, __EventDispatch, __EventType, __EventPhase,
-                > for #name #ty_param #handler_where_bounds {
-                    const IS_IMPLEMENTED: bool = #is_implemented_expr;
-                    const IS_ASYNC: bool = #is_async_expr;
-
-                    #[inline]
-                    fn on_phase(
-                        &'__EventLifetime self,
-                        target: &'__EventLifetime #crate_name::Handler<__EventDispatch>,
-                        ev: &'__EventLifetime mut __EventType,
-                        state: &'__EventLifetime mut __EventType::State,
-                    ) -> #crate_name::EventResult {
-                        #crate_name::private::on_phase::<
-                            Self, __EventDispatch, __EventType, __EventPhase,
-                            #crate_name::private::HandlerImplBlock,
-                        >(self, target, ev, state)
-                    }
-
-                    type FutureType = __PassthroughEventFut #handler_ty_param;
-
-                    #[inline]
-                    fn on_phase_async (
-                        &'__EventLifetime self,
-                        target: &'__EventLifetime #crate_name::Handler<__EventDispatch>,
-                        ev: &'__EventLifetime mut __EventType,
-                        state: &'__EventLifetime mut __EventType::State,
-                    ) -> __PassthroughEventFut #handler_ty_param {
-                        #crate_name::private::on_phase_async::<
-                            '__EventLifetime, Self, __EventDispatch, __EventType, __EventPhase,
-                            #crate_name::private::HandlerImplBlock,
-                        >(self, target, ev, state)
-                    }
-                }
+                impl #impl_bounds #crate_name::handlers::SyncEvents
+                    for #name #ty_param #where_bounds { }
             }
+        } else {
+            SynTokenStream::new()
         };
 
         quote! {
             #[allow(non_snake_case)]
             const _: () = {
-                impl #impl_bounds #crate_name::Events for #name #ty_param #where_bounds {
+                impl #impl_bounds #crate_name::handlers::Events for #name #ty_param #where_bounds {
                     fn get_service<__DowncastTarget>(&self) -> Option<&__DowncastTarget> {
                         #get_service_self
                         match self { #get_service_body }
                         None
                     }
                 }
-
+                #sync_event_impl
                 #event_handler
             };
         }

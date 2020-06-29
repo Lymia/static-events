@@ -46,7 +46,7 @@
 /// }
 ///
 /// let handler = Handler::new(MyEventHandler);
-/// assert_eq!(handler.dispatch(MyEventB(12)), 144);
+/// assert_eq!(handler.dispatch_sync(MyEventB(12)), 144);
 /// ```
 #[macro_export]
 macro_rules! simple_event {
@@ -108,7 +108,7 @@ macro_rules! simple_event {
 /// }
 ///
 /// let handler = Handler::new(MyEventHandler);
-/// assert_eq!(handler.dispatch(MyEvent(10)), MyEvent(100));
+/// assert_eq!(handler.dispatch_sync(MyEvent(10)), MyEvent(100));
 /// ```
 #[macro_export]
 macro_rules! self_event {
@@ -171,8 +171,8 @@ macro_rules! self_event {
 /// }
 ///
 /// let handler = Handler::new(MyEventHandler);
-/// assert_eq!(handler.dispatch(MyEvent(12)).ok(), Some(144));
-/// assert!(handler.dispatch(MyEvent(100)).is_err());
+/// assert_eq!(handler.dispatch_sync(MyEvent(12)).ok(), Some(144));
+/// assert!(handler.dispatch_sync(MyEvent(100)).is_err());
 /// ```
 #[macro_export]
 macro_rules! failable_event {

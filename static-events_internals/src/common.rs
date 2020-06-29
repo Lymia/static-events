@@ -78,29 +78,24 @@ fn make_call(
     }
 }
 pub fn make_merge_event_handler(
-    crate_name: &SynTokenStream,
+    crate_name: &SynTokenStream, is_async_handler: bool,
     name: EventHandlerTarget, item_generics: &Generics,
     distinguisher: Option<SynTokenStream>, mut groups: Vec<CallGroup>, common: Vec<CallStage>,
 ) -> SynTokenStream {
     let distinguisher = unwrap_distinguisher(crate_name, distinguisher);
 
-    let event_generics_raw = quote! {
+    let event_generics = generics(&quote! {
         '__EventLifetime,
-        __EventDispatch: #crate_name::Events,
-        __EventType: #crate_name::Event + '__EventLifetime,
+        __EventDispatch: #crate_name::handlers::Events,
+        __EventType: #crate_name::events::Event + '__EventLifetime,
         __EventPhase: #crate_name::handlers::EventPhase + '__EventLifetime,
-    };
-    let event_generics = generics(&event_generics_raw);
+    });
 
     let handler_generics = merge_generics(&event_generics, item_generics);
-    let no_lt_generics = strip_lifetimes(&handler_generics);
 
-    let (handler_impl_bounds, handler_ty_param, handler_where_bounds) =
+    let (handler_impl_bounds, _, handler_where_bounds) =
         handler_generics.split_for_impl();
     let (_, self_ty_param, _) = item_generics.split_for_impl();
-
-    let (_, no_lt_ty_param, _) = no_lt_generics.split_for_impl();
-    let no_lt_turbofish = no_lt_ty_param.as_turbofish();
 
     let name = match name {
         EventHandlerTarget::Ident(id) => quote! { #id #self_ty_param },
@@ -145,7 +140,7 @@ pub fn make_merge_event_handler(
             is_async_expr.extend(quote! { || #is_async });
             sync_stage.extend(quote! {{
                 match #call_sync {
-                    #crate_name::EvOk => { }
+                    #crate_name::events::EventResult::EvOk => { }
                     e => return e,
                 }
             }});
@@ -156,7 +151,7 @@ pub fn make_merge_event_handler(
                     #call_sync
                 };
                 match result {
-                    #crate_name::EvOk => { }
+                    #crate_name::events::EventResult::EvOk => { }
                     e => return e,
                 }
             }});
@@ -171,28 +166,68 @@ pub fn make_merge_event_handler(
             async_match.extend(quote! { #matcher => { #async_stage } });
         }
     }
+    let async_events = if is_async_handler {
+        let async_event_generics = generics(&quote! {
+            '__EventLifetime,
+            __EventDispatch: #crate_name::handlers::SyncEvents,
+            __EventType: #crate_name::events::SyncEvent + '__EventLifetime,
+            __EventPhase: #crate_name::handlers::EventPhase + '__EventLifetime,
+        });
+
+        let async_handler_ty = quote! { #crate_name::handlers::AsyncEventHandler<
+            '__EventLifetime, __EventDispatch, __EventType, __EventPhase, #distinguisher,
+        > };
+
+        let async_handler_generics = merge_generics(&async_event_generics, item_generics);
+        let no_lt_generics = strip_lifetimes(&async_handler_generics);
+
+        let (async_handler_impl_bounds, async_handler_ty_param, async_handler_where_bounds) =
+            async_handler_generics.split_for_impl();
+
+        let (_, no_lt_ty_param, _) = no_lt_generics.split_for_impl();
+        let no_lt_turbofish = no_lt_ty_param.as_turbofish();
+
+        quote! {
+            async fn __merge_events_async_wrapper #async_handler_impl_bounds (
+                _this: &#name,
+                _target: &'__EventLifetime #crate_name::handlers::Handler<__EventDispatch>,
+                _ev: &'__EventLifetime mut __EventType,
+                _state: &'__EventLifetime mut __EventType::State,
+            ) -> #crate_name::events::EventResult #async_handler_where_bounds {
+                #async_actions
+                match _this {
+                    #async_match
+                }
+                #crate_name::events::EventResult::EvOk
+            }
+
+            #crate_name::private::allow_existentials! {
+                (__MergeEventsWrapperFut #async_handler_impl_bounds #async_handler_where_bounds)
+                (::std::future::Future<Output = #crate_name::handlers::EventResult> +
+                    '__EventLifetime)
+            }
+
+            impl #async_handler_impl_bounds #async_handler_ty
+                for #name #async_handler_where_bounds
+            {
+                type FutureType = __MergeEventsWrapperFut #async_handler_ty_param;
+
+                #[inline]
+                fn on_phase_async(
+                    &'__EventLifetime self,
+                    target: &'__EventLifetime #crate_name::handlers::Handler<__EventDispatch>,
+                    ev: &'__EventLifetime mut __EventType,
+                    state: &'__EventLifetime mut __EventType::State,
+                ) -> __MergeEventsWrapperFut #async_handler_ty_param {
+                    __merge_events_async_wrapper #no_lt_turbofish (self, target, ev, state)
+                }
+            }
+        }
+    } else {
+        SynTokenStream::new()
+    };
 
     quote! {
-        async fn __merge_events_async_wrapper #handler_impl_bounds (
-            _this: &#name,
-            _target: &'__EventLifetime #crate_name::Handler<__EventDispatch>,
-            _ev: &'__EventLifetime mut __EventType,
-            _state: &'__EventLifetime mut __EventType::State,
-        ) -> #crate_name::EventResult #handler_where_bounds {
-            #async_actions
-            match _this {
-                #async_match
-            }
-            #crate_name::EvOk
-        }
-
-
-        #crate_name::private::allow_existentials! {
-            (__MergeEventsWrapperFut #handler_impl_bounds #handler_where_bounds)
-            (::std::future::Future<Output = #crate_name::EventResult> +
-                '__EventLifetime)
-        }
-
         impl #handler_impl_bounds #handler_ty for #name #handler_where_bounds {
             const IS_IMPLEMENTED: bool = #is_implemented_expr;
             const IS_ASYNC: bool = #is_async_expr;
@@ -200,29 +235,19 @@ pub fn make_merge_event_handler(
             #[inline]
             fn on_phase(
                 &'__EventLifetime self,
-                _target: &'__EventLifetime #crate_name::Handler<__EventDispatch>,
+                _target: &'__EventLifetime #crate_name::handlers::Handler<__EventDispatch>,
                 _ev: &'__EventLifetime mut __EventType,
                 _state: &'__EventLifetime mut __EventType::State,
-            ) -> #crate_name::EventResult {
+            ) -> #crate_name::events::EventResult {
                 let _this = self;
                 #sync_actions
                 match _this {
                     #sync_match
                 }
-                #crate_name::EvOk
-            }
-
-            type FutureType = __MergeEventsWrapperFut #handler_ty_param;
-
-            #[inline]
-            fn on_phase_async(
-                &'__EventLifetime self,
-                target: &'__EventLifetime #crate_name::Handler<__EventDispatch>,
-                ev: &'__EventLifetime mut __EventType,
-                state: &'__EventLifetime mut __EventType::State,
-            ) -> __MergeEventsWrapperFut #handler_ty_param {
-                __merge_events_async_wrapper #no_lt_turbofish (self, target, ev, state)
+                #crate_name::events::EventResult::EvOk
             }
         }
+
+        #async_events
     }
 }

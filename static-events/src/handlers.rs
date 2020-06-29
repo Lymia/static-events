@@ -1,8 +1,12 @@
 //! The underlying traits used to define event handlers.
 
 use crate::events::*;
+use futures::FutureExt;
+use futures::future::LocalBoxFuture;
+use std::fmt;
 use std::future::Future;
 use std::sync::Arc;
+use std::fmt::{Debug, Formatter};
 
 pub(crate) mod private {
     pub trait Sealed { }
@@ -41,7 +45,6 @@ pub trait Events: Sized + 'static {
 
 /// The base trait used to mark asynchronous event dispatchers.
 pub trait SyncEvents: Events + Sync + Send { }
-impl <T: Events + Sync + Send> SyncEvents for T { }
 
 /// A trait that defines a phase of handling a particular event.
 ///
@@ -54,8 +57,12 @@ impl <T: Events + Sync + Send> SyncEvents for T { }
 ///        handler implementations. This defaults to [`DefaultHandler`], which is what [`Handler`]
 ///        actually invokes events with.
 pub trait EventHandler<'a, E: Events, Ev: Event + 'a, P: EventPhase, D = DefaultHandler>: Events {
-    /// `true` if this `EventHandler` actually does anything. Used for optimizations.
-    const IS_IMPLEMENTED: bool;
+    /// `true` if this `EventHandler` actually does anything. This is used for optimizations.
+    const IS_IMPLEMENTED: bool = true;
+
+    /// `true` if this `EventHandler` contains asynchronous handlers. This is used for
+    /// optimizations and early panicking.
+    const IS_ASYNC: bool = false;
 
     /// Runs a phase of this event.
     fn on_phase(
@@ -67,9 +74,6 @@ pub trait EventHandler<'a, E: Events, Ev: Event + 'a, P: EventPhase, D = Default
 pub trait AsyncEventHandler<
     'a, E: SyncEvents, Ev: Event + 'a, P: EventPhase, D = DefaultHandler,
 > : SyncEvents + EventHandler<'a, E, Ev, P, D> {
-    /// `true` if this `EventHandler` is asynchronous. Used for optimizations.
-    const IS_ASYNC: bool;
-
     /// The type of the future returned by `on_phase_async`.
     type FutureType: Future<Output = EventResult> + Send + 'a;
 
@@ -81,19 +85,53 @@ pub trait AsyncEventHandler<
     ) -> Self::FutureType;
 }
 
-#[inline(never)]
-#[cold]
-fn missing_service<S>() -> ! {
-    panic!("Missing service: {}", std::any::type_name::<S>())
+/// A trait to help execute asynchronous event handlers in sync contents.
+pub trait SyncFutureExecutor: Send + Sync + 'static {
+    fn block_on(&self, fut: LocalBoxFuture<'_, ()>);
 }
 
-#[derive(Default, Debug)]
+/// A builder for a [`Handler`].
+#[derive(Default)]
+pub struct HandlerBuilder<E: Events>(HandlerData<E>);
+impl <E: Events> HandlerBuilder<E> {
+    /// Creates a new [`HandlerBuilder`] with a given [`Events`].
+    pub fn new(e: E) -> Self {
+        HandlerBuilder(HandlerData {
+            events: e,
+            async_ctx: None,
+        })
+    }
+
+    /// Creates a [`Handler`] from this builder.
+    pub fn build(self) -> Handler<E> {
+        Handler(Arc::new(self.0))
+    }
+}
+impl <E: SyncEvents> HandlerBuilder<E> {
+    /// Sets the executor this builder uses to run async events in synchronous dispatches.
+    pub fn future_executor(mut self, executor: impl SyncFutureExecutor) -> HandlerBuilder<E> {
+        self.0.async_ctx = Some(Box::new(executor));
+        self
+    }
+}
+
 /// A wrapper for [`Events`] that allows dispatching events into them.
-pub struct Handler<E: Events>(Arc<E>);
+#[derive(Default)]
+pub struct Handler<E: Events>(Arc<HandlerData<E>>);
+#[derive(Default)]
+struct HandlerData<E: Events> {
+    events: E,
+    async_ctx: Option<Box<dyn SyncFutureExecutor>>,
+}
 impl <E: Events> Handler<E> {
     /// Wraps an [`Events`] to allow dispatching events into it.
     pub fn new(e: E) -> Self {
-        Handler(Arc::new(e))
+        Self::builder(e).build()
+    }
+
+    /// Creates a new [`HandlerBuilder`] with a given [`Events`].
+    pub fn builder(e: E) -> HandlerBuilder<E> {
+        HandlerBuilder::new(e)
     }
 
     /// Retrieves a service from an [`Events`].
@@ -115,7 +153,7 @@ impl <E: Events> Handler<E> {
     /// assert_eq!(handler.get_service::<TestService>(), &TestService);
     /// ```
     pub fn get_service<S>(&self) -> &S {
-        match self.0.get_service() {
+        match self.0.events.get_service() {
             Some(v) => v,
             None => missing_service::<S>(),
         }
@@ -136,7 +174,7 @@ impl <E: Events> Handler<E> {
     /// assert_eq!(handler.get_service_opt::<TestService>(), Some(&TestService));
     /// ```
     pub fn get_service_opt<S>(&self) -> Option<&S> {
-        self.0.get_service()
+        self.0.events.get_service()
     }
 
     /// Downcasts this handler into a particular concrete handler type.
@@ -147,6 +185,9 @@ impl <E: Events> Handler<E> {
     /// Dispatches an event synchronously.
     ///
     /// Any asynchronous event handlers are polled until completion.
+    ///
+    /// If this `Handler` does not contain a [`SyncFutureExecutor`], this function will panic if
+    /// the event dispatches to any async event handlers.
     pub fn dispatch_sync<Ev: Event>(&self, mut ev: Ev) -> Ev::RetVal {
         let mut state = ev.starting_state();
         'outer: loop {
@@ -154,7 +195,7 @@ impl <E: Events> Handler<E> {
                 ($phase:ident) => {
                     if crate::private::is_implemented::<E, E, Ev, $phase, DefaultHandler>() {
                         match crate::private::on_phase::<E, E, Ev, $phase, DefaultHandler>(
-                            &self.0, self, &mut ev, &mut state
+                            &self.0.events, self, &mut ev, &mut state
                         ) {
                             EventResult::EvOk | EventResult::EvCancelStage => { }
                             EventResult::EvCancel => break 'outer,
@@ -177,8 +218,23 @@ impl <E: Events> Handler<E> {
         Arc::strong_count(&self.0)
     }
 }
-
 impl <E: SyncEvents> Handler<E> {
+    /// Blocks on a future in the context of this handler.
+    ///
+    /// This uses the [`SyncFutureExecutor`] contained in this handler, and panics if one is not
+    /// available.
+    pub fn block_on_future<T>(&self, fut: impl Future<Output = T>) -> T {
+        let mut result = None;
+        match self.0.async_ctx.as_ref() {
+            Some(x) => x.block_on(async { result = Some(fut.await); }.boxed_local()),
+            None => no_async_executor(),
+        }
+        match result {
+            Some(x) => x,
+            None => internal_async_executor_err(),
+        }
+    }
+
     /// Dispatches an event asynchronously. This future is bounded by the lifetime of `&self`
     /// and the event.
     ///
@@ -196,11 +252,11 @@ impl <E: SyncEvents> Handler<E> {
                         let result =
                             if crate::private::is_async::<E, E, Ev, $phase, DefaultHandler>() {
                                 crate::private::on_phase_async::<E, E, Ev, $phase, DefaultHandler>(
-                                    &self.0, self, &mut ev, &mut state
+                                    &self.0.events, self, &mut ev, &mut state
                                 ).await
                             } else {
                                 crate::private::on_phase::<E, E, Ev, $phase, DefaultHandler>(
-                                    &self.0, self, &mut ev, &mut state
+                                    &self.0.events, self, &mut ev, &mut state
                                 )
                             };
                         match result {
@@ -238,4 +294,30 @@ impl <E: Events> Clone for Handler<E> {
     fn clone(&self) -> Self {
         Handler(self.0.clone())
     }
+}
+impl <E: Events + Debug> Debug for Handler<E> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Handler")
+            .field("events", &self.0.events)
+            .finish()
+    }
+}
+
+#[inline(never)]
+#[cold]
+fn missing_service<S>() -> ! {
+    panic!("Missing service: {}", std::any::type_name::<S>())
+}
+
+#[inline(never)]
+#[cold]
+fn no_async_executor() -> ! {
+    panic!("An async handler was found during a synchronous events dispatch, and no \
+            `SyncFutureExecutor` available in the given context.")
+}
+
+#[inline(never)]
+#[cold]
+fn internal_async_executor_err() -> ! {
+    panic!("Given `SyncFutureExecutor` instance did not run the future?")
 }

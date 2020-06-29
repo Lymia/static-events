@@ -74,7 +74,7 @@
 //! }
 //!
 //! let handler = Handler::new(MyEventHandler);
-//! assert_eq!(handler.dispatch(MyEvent(42)), 42);
+//! assert_eq!(handler.dispatch_sync(MyEvent(42)), 42);
 //! ```
 //!
 //! Fields inside the [`Events`] can be marked with `#[subhandler]` to cause any events to be
@@ -107,7 +107,7 @@
 //! }
 //!
 //! let handler = Handler::new(SquaringEventHandler::default());
-//! assert_eq!(handler.dispatch(MyEvent(9)), 81);
+//! assert_eq!(handler.dispatch_sync(MyEvent(9)), 81);
 //! ```
 //!
 //! # Limitations
