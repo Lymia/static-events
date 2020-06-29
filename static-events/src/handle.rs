@@ -130,11 +130,15 @@ impl <E: Events> EventsHandle<E> {
     /// Returns the underlying [`Handler`] wrapped in a [`Some`], or [`None`] if it has already
     /// been shut down.
     pub fn try_lock(&self) -> Option<Handler<E>> {
-        let lock = self.0.status.read();
-        match &*lock {
-            Status::Inactive => panic!("DispatchHandle not yet active."),
-            Status::Active(handler) => Some(handler.clone()),
-            Status::Shutdown => None,
+        if self.0.shutdown_initialized.load(Ordering::SeqCst) {
+            None
+        } else {
+            let lock = self.0.status.read();
+            match &*lock {
+                Status::Inactive => panic!("DispatchHandle not yet active."),
+                Status::Active(handler) => Some(handler.clone()),
+                Status::Shutdown => None,
+            }
         }
     }
 }
