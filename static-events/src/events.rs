@@ -76,7 +76,7 @@ pub trait Event: Sized {
 }
 
 /// A trait for events that can be used asynchronously.
-pub trait SyncEvent: Event + Sized { }
+pub trait SyncEvent: Event + Send + Sized { }
 impl <T: Event + Sized + Send> SyncEvent for T { }
 
 /// An [`Event`] that does not use the `MethodRetVal` or `StateArg` mechanisms.

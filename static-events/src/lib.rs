@@ -2,12 +2,6 @@
 
 // TODO: Implement filtering of some kind on events, and state between phases.
 // TODO: Document how to set the phase of an event handler.
-// TODO: Refactor out a synchronous-only API that does not bound on Sync/etc.
-//       (design: split out async EventHandler, async requires a Send bound on event.)
-//       (design: require a Send+Sync bound on Events for async.)
-//       (design: split out async/sync preludes.)
-// TODO: Provide a way to provide a `Handle` with a means to control how it runs async code in
-//       synchronous contexts.
 
 //! A generic zero-cost asynchronous event handler system built on compile-time magic.
 //!
@@ -75,7 +69,7 @@
 //! }
 //!
 //! let handler = Handler::new(MyEventHandler);
-//! assert_eq!(handler.dispatch_sync(MyEvent(42)), 42);
+//! assert_eq!(handler.dispatch(MyEvent(42)), 42);
 //! ```
 //!
 //! Fields inside the [`Events`] can be marked with `#[subhandler]` to cause any events to be
@@ -111,7 +105,35 @@
 //! }
 //!
 //! let handler = Handler::new(SquaringEventHandler::default());
-//! assert_eq!(handler.dispatch_sync(MyEvent(9)), 81);
+//! assert_eq!(handler.dispatch(MyEvent(9)), 81);
+//! ```
+//!
+//! # Async Handlers
+//!
+//! Asynchronous handlers can be defined much the same as synchronous event handlers. The interface
+//! is the same, simply import `static_events::prelude_async` instead of
+//! `static_events::prelude_sync`.
+//!
+//! Example:
+//! ```
+//! use static_events::prelude_async::*;
+//!
+//! struct MyEvent(u32);
+//! simple_event!(MyEvent, u32, 0);
+//!
+//! #[derive(Events, Default)]
+//! struct MyEventHandler;
+//!
+//! #[events_impl]
+//! impl MyEventHandler {
+//!     #[event_handler]
+//!     fn handle_event(ev: &MyEvent, i: &mut u32) {
+//!         *i += ev.0;
+//!     }
+//! }
+//!
+//! let handler = Handler::new(MyEventHandler);
+//! assert_eq!(futures::executor::block_on(handler.dispatch_async(MyEvent(42))), 42);
 //! ```
 //!
 //! # Limitations

@@ -203,7 +203,7 @@ pub fn make_merge_event_handler(
 
             #crate_name::private::allow_existentials! {
                 (__MergeEventsWrapperFut #async_handler_impl_bounds #async_handler_where_bounds)
-                (::std::future::Future<Output = #crate_name::handlers::EventResult> +
+                (::std::future::Future<Output = #crate_name::events::EventResult> +
                     '__EventLifetime)
             }
 

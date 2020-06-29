@@ -254,7 +254,7 @@ fn create_normal_handler(
         __EventDispatch: #crate_name::handlers::Events,
     });
     let sync_generics = merge_generics(&merged_generics, &sync_generics);
-    let (sync_bounds, sync_ty, sync_where_bounds) = sync_generics.split_for_impl();
+    let (sync_bounds, _, sync_where_bounds) = sync_generics.split_for_impl();
 
     let async_generics = generics(&quote! {
         '__EventLifetime,
@@ -313,7 +313,7 @@ fn create_normal_handler(
     };
     let async_impl = if is_async_handler {
         quote! {
-            impl #async_bounds #crate_name::handlers::SyncEventHandler<
+            impl #async_bounds #crate_name::handlers::AsyncEventHandler<
                 '__EventLifetime, __EventDispatch, #event_ty, #phase, #phantom,
             > for #self_ty #async_where_bounds {
                 type FutureType = #future_ty;
