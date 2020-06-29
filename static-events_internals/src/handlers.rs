@@ -258,7 +258,7 @@ fn create_normal_handler(
 
     let async_generics = generics(&quote! {
         '__EventLifetime,
-        __EventDispatch: #crate_name::handlers::SyncEvents,
+        __EventDispatch: #crate_name::handlers::AsyncEvents,
     });
     let async_generics = merge_generics(&merged_generics, &async_generics);
     let (async_bounds, async_ty, async_where_bounds) = async_generics.split_for_impl();

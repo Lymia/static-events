@@ -79,15 +79,15 @@ impl <
 }
 
 pub trait UniversalAsyncEventHandler<
-    'a, E: SyncEvents, Ev: SyncEvent + 'a, P: EventPhase, D = DefaultHandler,
->: SyncEvents {
+    'a, E: AsyncEvents, Ev: SyncEvent + 'a, P: EventPhase, D = DefaultHandler,
+>: AsyncEvents {
     type FutureType: Future<Output = EventResult> + Send;
     fn on_phase_async(
         &'a self, target: &'a Handler<E>, ev: &'a mut Ev, state: &'a mut Ev::State,
     ) -> Self::FutureType;
 }
 impl <
-    'a, E: SyncEvents, Ev: SyncEvent + 'a, P: EventPhase, D, T: SyncEvents,
+    'a, E: AsyncEvents, Ev: SyncEvent + 'a, P: EventPhase, D, T: AsyncEvents,
 > UniversalAsyncEventHandler<'a, E, Ev, P, D> for T {
     default type FutureType = NullFuture;
     default fn on_phase_async(
@@ -97,8 +97,8 @@ impl <
     }
 }
 impl <
-    'a, E: SyncEvents, Ev: SyncEvent + 'a, P: EventPhase, D,
-    T: SyncEvents + AsyncEventHandler<'a, E, Ev, P, D>,
+    'a, E: AsyncEvents, Ev: SyncEvent + 'a, P: EventPhase, D,
+    T: AsyncEvents + AsyncEventHandler<'a, E, Ev, P, D>,
 > UniversalAsyncEventHandler<'a, E, Ev, P, D> for T {
     type FutureType = <Self as AsyncEventHandler<'a, E, Ev, P, D>>::FutureType;
     #[inline(always)]
@@ -135,7 +135,7 @@ pub fn on_phase<
 
 #[inline(always)]
 pub fn on_phase_async<
-    'a, T: SyncEvents, E: SyncEvents, Ev: SyncEvent + 'a, P: EventPhase + 'a, D: 'a,
+    'a, T: AsyncEvents, E: AsyncEvents, Ev: SyncEvent + 'a, P: EventPhase + 'a, D: 'a,
 >(
     this: &'a T, target: &'a Handler<E>, ev: &'a mut Ev, state: &'a mut Ev::State,
 ) -> <T as UniversalAsyncEventHandler<'a, E, Ev, P, D>>::FutureType {

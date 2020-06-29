@@ -2,6 +2,7 @@
 
 // TODO: Implement filtering of some kind on events, and state between phases.
 // TODO: Document how to set the phase of an event handler.
+// TODO: Forbid async event handlers in sync event handlers.
 
 //! A generic zero-cost asynchronous event handler system built on compile-time magic.
 //!
@@ -194,5 +195,6 @@ pub mod prelude_async {
     pub use crate::prelude_common::*;
     pub use crate::events::SyncEvent;
     pub use crate::handle::EventsHandle;
-    pub use crate::handlers::{SyncEvents as Events, sync_events_impl as events_impl};
+    pub use crate::handlers::{Events as SyncEvents, events_impl as sync_events_impl};
+    pub use crate::handlers::{AsyncEvents as Events, async_events_impl as events_impl};
 }

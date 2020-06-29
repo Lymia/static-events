@@ -44,7 +44,7 @@ pub trait Events: Sized + 'static {
 }
 
 /// The base trait used to mark asynchronous event dispatchers.
-pub trait SyncEvents: Events + Sync + Send { }
+pub trait AsyncEvents: Events + Sync + Send { }
 
 pub use static_events_derive::*;
 
@@ -74,8 +74,8 @@ pub trait EventHandler<'a, E: Events, Ev: Event + 'a, P: EventPhase, D = Default
 
 /// A trait that defines a phase of handling a particular event asynchronously.
 pub trait AsyncEventHandler<
-    'a, E: SyncEvents, Ev: Event + 'a, P: EventPhase, D = DefaultHandler,
-> : SyncEvents + EventHandler<'a, E, Ev, P, D> {
+    'a, E: AsyncEvents, Ev: Event + 'a, P: EventPhase, D = DefaultHandler,
+> : AsyncEvents + EventHandler<'a, E, Ev, P, D> {
     /// The type of the future returned by `on_phase_async`.
     type FutureType: Future<Output = EventResult> + Send + 'a;
 
@@ -109,7 +109,7 @@ impl <E: Events> HandlerBuilder<E> {
         Handler(Arc::new(self.0))
     }
 }
-impl <E: SyncEvents> HandlerBuilder<E> {
+impl <E: AsyncEvents> HandlerBuilder<E> {
     /// Sets the executor this builder uses to run async events in synchronous dispatches.
     pub fn future_executor(mut self, executor: impl SyncFutureExecutor) -> HandlerBuilder<E> {
         self.0.async_ctx = Some(Box::new(executor));
@@ -222,7 +222,7 @@ impl <E: Events> Handler<E> {
         Arc::strong_count(&self.0)
     }
 }
-impl <E: SyncEvents> Handler<E> {
+impl <E: AsyncEvents> Handler<E> {
     /// Blocks on a future in the context of this handler.
     ///
     /// This uses the [`SyncFutureExecutor`] contained in this handler, and panics if one is not

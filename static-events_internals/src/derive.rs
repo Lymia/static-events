@@ -253,7 +253,7 @@ impl DeriveStaticEvents {
         );
         let sync_event_impl = if self.is_async_handler {
             quote! {
-                impl #impl_bounds #crate_name::handlers::SyncEvents
+                impl #impl_bounds #crate_name::handlers::AsyncEvents
                     for #name #ty_param #where_bounds { }
             }
         } else {
