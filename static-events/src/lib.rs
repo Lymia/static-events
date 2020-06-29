@@ -193,7 +193,7 @@ pub mod prelude_sync {
 #[allow(non_camel_case_types)]
 pub mod prelude_async {
     pub use crate::prelude_common::*;
-    pub use crate::events::SyncEvent;
+    pub use crate::events::AsyncEvent;
     pub use crate::handle::EventsHandle;
     pub use crate::handlers::{Events as SyncEvents, events_impl as sync_events_impl};
     pub use crate::handlers::{AsyncEvents as Events, async_events_impl as events_impl};

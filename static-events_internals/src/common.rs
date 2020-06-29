@@ -170,7 +170,7 @@ pub fn make_merge_event_handler(
         let async_event_generics = generics(&quote! {
             '__EventLifetime,
             __EventDispatch: #crate_name::handlers::AsyncEvents,
-            __EventType: #crate_name::events::SyncEvent + '__EventLifetime,
+            __EventType: #crate_name::events::AsyncEvent + '__EventLifetime,
             __EventPhase: #crate_name::handlers::EventPhase + '__EventLifetime,
         });
 

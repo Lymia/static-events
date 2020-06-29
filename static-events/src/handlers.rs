@@ -245,7 +245,7 @@ impl <E: AsyncEvents> Handler<E> {
     /// Any synchronous events are run immediately as part of the [`Future::poll`] execution.
     ///
     /// This method requires that the [`Events`] type parameter is [`Sync`].
-    pub fn dispatch_async<'a, Ev: SyncEvent + 'a>(
+    pub fn dispatch_async<'a, Ev: AsyncEvent + 'a>(
         &'a self, mut ev: Ev,
     ) -> impl Future<Output = Ev::RetVal> + 'a {
         async move {
@@ -289,7 +289,7 @@ impl <E: AsyncEvents> Handler<E> {
     /// Any synchronous events are run immediately as part of the [`Future::poll`] execution.
     ///
     /// This method requires that the [`Events`] type parameter is [`Sync`].
-    pub fn dispatch_async_static<Ev: SyncEvent + 'static>(
+    pub fn dispatch_async_static<Ev: AsyncEvent + 'static>(
         &self, ev: Ev,
     ) -> impl Future<Output = Ev::RetVal> + 'static {
         let this = self.clone();
