@@ -19,7 +19,9 @@ enum Status<E: Events> {
 
 #[derive(Debug)]
 struct HandleData<E: Events> {
-    status: RwLock<Status<E>>, shutdown_initialized: AtomicBool,
+    status: RwLock<Status<E>>,
+    shutdown_initialized: AtomicBool,
+    is_shutdown: AtomicBool,
 }
 
 #[inline(never)]
@@ -41,6 +43,7 @@ impl <E: Events> EventsHandle<E> {
         EventsHandle(Arc::new(HandleData {
             status: RwLock::new(Status::Inactive),
             shutdown_initialized: AtomicBool::new(false),
+            is_shutdown: AtomicBool::new(false),
         }))
     }
 
@@ -65,9 +68,10 @@ impl <E: Events> EventsHandle<E> {
 
     /// Gets the number of active handlers from this handle, or handles cloned from it.
     pub fn lock_count(&self) -> usize {
+        let is_shutdown = self.0.is_shutdown.load(Ordering::SeqCst);
         match &*self.0.status.read() {
             Status::Inactive => panic!("EventsHandle not yet active."),
-            Status::Active(handler) => handler.refcount() - 1,
+            Status::Active(handler) => handler.refcount() - if is_shutdown { 0 } else { 1 },
             Status::Shutdown => 0,
         }
     }
@@ -79,6 +83,7 @@ impl <E: Events> EventsHandle<E> {
     }
     fn internal_shutdown(&self, mut lock: RwLockWriteGuard<Status<E>>) {
         if let Status::Active(_) = &*lock {
+            self.0.is_shutdown.store(true, Ordering::SeqCst);
             *lock = Status::Shutdown;
         } else {
             panic!("Attempt to shutdown a EventsHandle twice! (unreachable case?)");
