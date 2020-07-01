@@ -148,7 +148,6 @@ mod events_types;
 pub use crate::events_types::*;
 
 pub mod events;
-pub mod handle;
 pub mod handlers;
 
 // Fixes for documentation.
@@ -193,7 +192,6 @@ pub mod prelude_sync {
 pub mod prelude_async {
     pub use crate::prelude_common::*;
     pub use crate::events::AsyncEvent;
-    pub use crate::handle::EventsHandle;
     pub use crate::handlers::{Events as SyncEvents, events_impl as sync_events_impl};
     pub use crate::handlers::{AsyncEvents as Events, async_events_impl as events_impl};
 }
