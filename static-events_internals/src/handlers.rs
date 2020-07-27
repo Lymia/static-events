@@ -254,7 +254,7 @@ fn create_normal_handler(
     let event_ty = &sig.event_ty;
     let event_ty_event = quote! { <#event_ty as #crate_name::events::Event> };
 
-    let method_generics = strip_lifetimes(&sig.method_generics);
+    let method_generics = reparent_lifetimes(&sig.method_generics, quote!('__EventLifetime));
     let merged_generics = merge_generics(impl_generics, &method_generics);
 
     let sync_generics = generics(&quote! {

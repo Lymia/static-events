@@ -126,11 +126,17 @@ pub fn generics(a: impl ToTokens) -> Generics {
 }
 
 /// Common function for processing generics.
-fn process_generics(list: &[&Generics], skip_lifetimes: bool) -> Generics {
+fn process_generics(
+    list: &[&Generics], skip_lifetimes: bool, reparent_lifetimes: Option<Lifetime>,
+) -> Generics {
     let mut toks = SynTokenStream::new();
     if !skip_lifetimes {
         for g in list {
             for lifetime in g.lifetimes() {
+                let mut lifetime = (*lifetime).clone();
+                if let Some(lt) = &reparent_lifetimes {
+                    lifetime.bounds.push(lt.clone());
+                }
                 toks.extend(quote! { #lifetime, })
             }
         }
@@ -160,12 +166,17 @@ fn process_generics(list: &[&Generics], skip_lifetimes: bool) -> Generics {
 
 /// Merges two sets of generics into one.
 pub fn merge_generics(a: &Generics, b: &Generics) -> Generics {
-    process_generics(&[a, b], false)
+    process_generics(&[a, b], false, None)
 }
 
 /// Strips lifetimes from a set of generics.
 pub fn strip_lifetimes(a: &Generics) -> Generics {
-    process_generics(&[a], true)
+    process_generics(&[a], true, None)
+}
+
+/// Reparents the lifetimes in a set of generics.
+pub fn reparent_lifetimes(a: &Generics, lt: SynTokenStream) -> Generics {
+    process_generics(&[a], false, Some(parse2(lt).unwrap()))
 }
 
 /// Creates a span for an entire TokenStream.
