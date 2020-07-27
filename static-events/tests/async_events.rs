@@ -35,6 +35,7 @@ fn sync_in_async_event_test() {
     assert_eq!(futures::executor::block_on(handler.dispatch_async(MyEvent(20))), 40);
 }
 
+#[test]
 fn async_nonstatic_test() {
     let handler = Handler::new(MyEventHandler);
     assert_eq!(futures::executor::block_on(handler.dispatch_async(AsyncNonStatic(&20))), 20);
