@@ -195,9 +195,9 @@ macro_rules! failable_event {
             fn starting_state(&self) -> $crate::private::Result<$state, $error> {
                 Ok($starting_val)
             }
-            fn borrow_state<'a>(
-                &self, state: &'a mut $crate::private::Result<$state, $error>,
-            ) -> &'a mut $state {
+            fn borrow_state<'__state>(
+                &self, state: &'__state mut $crate::private::Result<$state, $error>,
+            ) -> &'__state mut $state {
                 state.as_mut().expect("Continuing already failed event?")
             }
             fn to_event_result(
