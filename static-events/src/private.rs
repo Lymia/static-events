@@ -6,6 +6,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Poll, Context};
 
+#[doc(hidden)] pub use std::option::{Option, Option::{Some, None}};
 #[doc(hidden)] pub use std::result::Result;
 
 /// A hack to allow the `type_alias_impl_trait` feature flag to be contained to this crate.
@@ -220,4 +221,13 @@ impl <E> From<Result<EventResult, E>> for FailableReturn<E> {
         FailableReturn(res)
     }
 }
-
+impl <E> From<()> for FailableReturn<E> {
+    fn from(_: ()) -> Self {
+        FailableReturn(Ok(EventResult::EvOk))
+    }
+}
+impl <E> From<EventResult> for FailableReturn<E> {
+    fn from(res: EventResult) -> Self {
+        FailableReturn(Ok(res))
+    }
+}

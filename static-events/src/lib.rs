@@ -163,7 +163,7 @@ mod prelude_common {
     pub use crate::events::EventResult::*;
     pub use crate::handlers::{Handler, event_handler};
     pub use crate::handlers::{EvInit, EvCheck, EvBeforeEvent, EvOnEvent, EvAfterEvent};
-    pub use crate::{simple_event, self_event, failable_event};
+    pub use crate::{simple_event, self_event, failable_event, failable_self_event};
 }
 mod prelude_private {
     use crate::handlers::*;

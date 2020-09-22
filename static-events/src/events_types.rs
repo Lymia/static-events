@@ -130,7 +130,6 @@ macro_rules! self_event {
     };
 }
 
-
 /// A helper macro to define events that can fail.
 ///
 /// The first argument is the event type, the second is the type of the event state, and the
@@ -162,7 +161,7 @@ macro_rules! self_event {
 /// ```
 /// use static_events::prelude_sync::*;
 /// # use std::io;
-/// # pub struct MyEvent(u32); failable_event!(MyEvent, u32, ::std::io::Error);
+/// # pub struct MyEvent(u32); failable_event!(MyEvent, u32, io::Error);
 ///
 /// #[derive(Events)]
 /// struct MyEventHandler;
@@ -224,5 +223,91 @@ macro_rules! failable_event {
     };
     ($ev:ty, $state:ty, $error:ty, $starting_val:expr $(,)?) => {
         failable_event!([] $ev, $state, $error, $starting_val);
+    };
+}
+
+/// A helper macro to define events that return themselves as output and can fail.
+///
+/// The first argument is the event type, the second is the type of error type.
+///
+/// Event handlers for events defined using this macro should return either a
+/// `Result<EventResult>` or `Result<()>`.
+///
+/// # Example
+///
+/// Declaration:
+///
+/// ```
+/// # use std::io;
+/// use static_events::prelude_sync::*;
+/// pub struct MyEvent(u32);
+/// failable_self_event!(MyEvent, io::Error);
+/// ```
+///
+/// Usage:
+///
+/// ```
+/// use static_events::prelude_sync::*;
+///
+/// # use std::io;
+/// # #[derive(PartialEq, Debug)] pub struct MyEvent(u32);
+/// # failable_self_event!(MyEvent, io::Error);
+/// #[derive(Events)]
+/// struct MyEventHandler;
+///
+/// #[events_impl]
+/// impl MyEventHandler {
+///     #[event_handler]
+///     fn handle_event(ev: &mut MyEvent) -> io::Result<()> {
+///         if ev.0 > 50 { Err(io::Error::new(io::ErrorKind::Other, "too large!"))? }
+///         ev.0 *= ev.0;
+///         Ok(())
+///     }
+/// }
+///
+/// let handler = Handler::new(MyEventHandler);
+/// assert_eq!(handler.dispatch(MyEvent(12)).ok(), Some(MyEvent(144)));
+/// assert!(handler.dispatch(MyEvent(100)).is_err());
+/// ```
+#[macro_export]
+macro_rules! failable_self_event {
+    ([$($bounds:tt)*] $ev:ty, $error:ty $(,)?) => {
+        impl <$($bounds)*> $crate::events::Event for $ev {
+            type State = ((), $crate::private::Option<$error>);
+            type StateArg = ();
+            type MethodRetVal = $crate::private::FailableReturn<$error>;
+            type RetVal = $crate::private::Result<$ev, $error>;
+            fn starting_state(&self) -> ((), $crate::private::Option<$error>) {
+                ((), $crate::private::None)
+            }
+            fn borrow_state<'__state>(
+                &self, state: &'__state mut ((), $crate::private::Option<$error>),
+            ) -> &'__state mut () {
+                &mut state.0
+            }
+            fn to_event_result(
+                &self, state: &mut ((), $crate::private::Option<$error>),
+                result: $crate::private::FailableReturn<$error>,
+            ) -> $crate::events::EventResult {
+                match result.0 {
+                    Ok(result) => result,
+                    Err(err) => {
+                        state.1 = $crate::private::Some(err);
+                        $crate::events::EventResult::EvCancel
+                    }
+                }
+            }
+            fn to_return_value(
+                self, state: ((), $crate::private::Option<$error>),
+            ) -> $crate::private::Result<$ev, $error> {
+                match state.1 {
+                    $crate::private::Some(v) => Err(v),
+                    $crate::private::None => Ok(self),
+                }
+            }
+        }
+    };
+    ($ev:ty, $error:ty $(,)?) => {
+        failable_self_event!([] $ev, $error);
     };
 }
