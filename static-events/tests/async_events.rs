@@ -1,4 +1,5 @@
 use static_events::prelude_async::*;
+use std::sync::Arc;
 
 struct MyEvent(u32);
 simple_event!(MyEvent, u32, 0);
@@ -38,5 +39,17 @@ fn sync_in_async_event_test() {
 #[test]
 fn async_nonstatic_test() {
     let handler = Handler::new(MyEventHandler);
+    assert_eq!(futures::executor::block_on(handler.dispatch_async(AsyncNonStatic(&20))), 20);
+}
+
+#[test]
+fn arc_sync_in_async_event_test() {
+    let handler = Handler::new(Arc::new(MyEventHandler));
+    assert_eq!(futures::executor::block_on(handler.dispatch_async(MyEvent(20))), 40);
+}
+
+#[test]
+fn arc_async_nonstatic_test() {
+    let handler = Handler::new(Arc::new(MyEventHandler));
     assert_eq!(futures::executor::block_on(handler.dispatch_async(AsyncNonStatic(&20))), 20);
 }

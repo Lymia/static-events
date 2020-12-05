@@ -40,9 +40,15 @@ pub trait Events: Sized + 'static {
     /// Gets a service from this event dispatch.
     fn get_service<S>(&self) -> Option<&S>;
 }
+impl <T: Events> Events for Arc<T> {
+    fn get_service<S>(&self) -> Option<&S> {
+        (**self).get_service()
+    }
+}
 
 /// The base trait used to mark asynchronous event dispatchers.
 pub trait AsyncEvents: Events + Sync + Send { }
+impl <T: AsyncEvents> AsyncEvents for Arc<T> { }
 
 pub use static_events_derive::*;
 
@@ -69,6 +75,17 @@ pub trait EventHandler<'a, E: Events, Ev: Event + 'a, P: EventPhase, D = Default
         &'a self, target: &'a Handler<E>, ev: &'a mut Ev, state: &'a mut Ev::State,
     ) -> EventResult;
 }
+impl <
+    'a, E: Events, Ev: Event + 'a, P: EventPhase, D, T: EventHandler<'a, E, Ev, P, D>
+> EventHandler<'a, E, Ev, P, D> for Arc<T> {
+    const IS_IMPLEMENTED: bool = T::IS_IMPLEMENTED;
+    const IS_ASYNC: bool = T::IS_ASYNC;
+    fn on_phase(
+        &'a self, target: &'a Handler<E>, ev: &'a mut Ev, state: &'a mut Ev::State,
+    ) -> EventResult {
+        (**self).on_phase(target, ev, state)
+    }
+}
 
 /// A trait that defines a phase of handling a particular event asynchronously.
 pub trait AsyncEventHandler<
@@ -84,6 +101,17 @@ pub trait AsyncEventHandler<
         &'a self, target: &'a Handler<E>, ev: &'a mut Ev, state: &'a mut Ev::State,
     ) -> Self::FutureType;
 }
+impl <
+    'a, E: AsyncEvents, Ev: Event + 'a, P: EventPhase, D, T: AsyncEventHandler<'a, E, Ev, P, D>,
+> AsyncEventHandler<'a, E, Ev, P, D> for Arc<T> {
+    type FutureType = T::FutureType;
+    fn on_phase_async(
+        &'a self, target: &'a Handler<E>, ev: &'a mut Ev, state: &'a mut Ev::State,
+    ) -> Self::FutureType {
+        (**self).on_phase_async(target, ev, state)
+    }
+}
+
 
 /// A wrapper for [`Events`] that allows dispatching events into them.
 #[derive(Default)]
